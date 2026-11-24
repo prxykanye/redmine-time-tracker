@@ -1,5 +1,7 @@
 # Redmine Time Tracker
 
+[![CI](https://github.com/prxykanye/redmine-time-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/prxykanye/redmine-time-tracker/actions/workflows/ci.yml)
+
 Desktop time tracker for Redmine. It keeps a local draft of your work, shows a
 live timer per issue, rounds the tracked time and publishes it through the
 Redmine REST API.
