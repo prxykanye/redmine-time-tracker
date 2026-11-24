@@ -32,7 +32,17 @@ draft never touches the network. Only publishing does.
 - Crash recovery: a running draft writes a heartbeat, and the next launch asks
   whether to keep the time up to the last heartbeat or include the downtime.
 - Issues that disappeared from the open list but still have drafts stay visible.
-- System tray with a single-instance lock.
+- The interface has three tabs: running and paused drafts, all assigned issues,
+  and the local publication history.
+- Sticky panel with the running track, its live timer and the pause/publish
+  controls, visible regardless of the scroll position.
+- Search by issue number or subject across both issue tabs.
+- Progress bars for estimate usage.
+- Local publication history with a month filter and a link to the Redmine entry.
+- Keyboard shortcuts and a window geometry remembered between launches.
+- System tray tooltip with the running issue and elapsed time.
+- Single-instance lock and a tray icon; closing the window hides it when a tray
+  is available and quits normally otherwise.
 - API key is stored with owner-only permissions and is never logged.
 
 ## Requirements
@@ -89,6 +99,15 @@ Tracked time is rounded up to the nearest 5 minutes:
 | 1 h 0 s – 1 h 5 min | 1 h 5 min |
 
 The confirmation dialog always shows both the tracked and the rounded value.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+R` | Refresh the issue list |
+| `Ctrl+F` | Focus the search field |
+| `Ctrl+Space` | Start the most recent draft, or pause the running one |
+| `Ctrl+P` | Publish the running draft |
 
 ## Time recovery
 

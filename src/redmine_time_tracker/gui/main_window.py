@@ -9,19 +9,21 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSystemTrayIcon,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -37,12 +39,13 @@ from .dialogs import (
     AddTrackDialog,
     ApiKeyDialog,
     ConfirmationDialog,
-    HistoryDialog,
     PublishTrackDialog,
     RecoveryDialog,
     SettingsDialog,
 )
-from .widgets import IssueWidget, MetricsWidget
+from .history import HistoryWidget
+from .theme import muted_style
+from .widgets import ActiveTrackPanel, IssueWidget, MetricsWidget
 from .workers import Worker
 
 HEARTBEAT_INTERVAL_MS = 30_000
@@ -78,7 +81,8 @@ class MainWindow(QMainWindow):
         self.current_user_id: int | None = None
         self.issues: dict[int, Issue] = {}
         self.activities: list[Activity] = []
-        self.issue_widgets: dict[int, IssueWidget] = {}
+        self.pending_widgets: dict[int, IssueWidget] = {}
+        self.all_widgets: dict[int, IssueWidget] = {}
         self.tray_icon: QSystemTrayIcon | None = None
 
         self._workers: set[Worker] = set()
@@ -90,11 +94,17 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Redmine Time Tracker")
         self.setMinimumSize(900, 600)
 
+        self.gui_settings = QSettings("redmine-time-tracker", "redmine-time-tracker")
+        geometry = self.gui_settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+
         self._build_ui()
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
         if self._tray_available:
             self._build_tray()
         self._build_menu()
+        self._build_shortcuts()
         self._setup_timers()
 
         QTimer.singleShot(0, self._startup)
@@ -110,6 +120,7 @@ class MainWindow(QMainWindow):
 
         toolbar = QHBoxLayout()
         self.refresh_btn = QPushButton("🔄 Обновить задачи")
+        self.refresh_btn.setToolTip("Обновить список задач (Ctrl+R)")
         self.refresh_btn.clicked.connect(self.refresh_issues)
         toolbar.addWidget(self.refresh_btn)
 
@@ -139,15 +150,42 @@ class MainWindow(QMainWindow):
         self.metrics = MetricsWidget()
         layout.addWidget(self.metrics)
 
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.issues_container = QWidget()
-        self.issues_layout = QVBoxLayout(self.issues_container)
-        self.issues_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.issues_layout.setSpacing(12)
-        self.scroll_area.setWidget(self.issues_container)
-        layout.addWidget(self.scroll_area)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Поиск по номеру или теме задачи (Ctrl+F)")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        layout.addWidget(self.search_input)
+
+        self.active_panel = ActiveTrackPanel()
+        self.active_panel.pause_requested.connect(self._pause_track)
+        self.active_panel.publish_requested.connect(self._publish_track)
+        layout.addWidget(self.active_panel)
+
+        self.tabs = QTabWidget()
+        self.pending_page, self.pending_layout = self._make_issue_page()
+        self.all_page, self.all_layout = self._make_issue_page()
+        self.history_widget = HistoryWidget(self.database, self.config.redmine_url)
+        self.tabs.addTab(self.pending_page, "Сейчас")
+        self.tabs.addTab(self.all_page, "Задачи")
+        self.tabs.addTab(self.history_widget, "История")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tabs)
+
+    def _make_issue_page(self) -> tuple[QWidget, QVBoxLayout]:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        container_layout.setSpacing(12)
+        scroll.setWidget(container)
+        outer.addWidget(scroll)
+        return page, container_layout
 
     def _build_tray(self) -> None:
         self.tray_icon = QSystemTrayIcon(self)
@@ -194,6 +232,27 @@ class MainWindow(QMainWindow):
         quit_action = QAction("Выход", self)
         quit_action.triggered.connect(self._quit)
         file_menu.addAction(quit_action)
+
+    def _build_shortcuts(self) -> None:
+        refresh = QAction(self)
+        refresh.setShortcut("Ctrl+R")
+        refresh.triggered.connect(self.refresh_issues)
+        self.addAction(refresh)
+
+        find = QAction(self)
+        find.setShortcut("Ctrl+F")
+        find.triggered.connect(self._focus_search)
+        self.addAction(find)
+
+        toggle = QAction(self)
+        toggle.setShortcut("Ctrl+Space")
+        toggle.triggered.connect(self._toggle_active)
+        self.addAction(toggle)
+
+        publish = QAction(self)
+        publish.setShortcut("Ctrl+P")
+        publish.triggered.connect(self._publish_active)
+        self.addAction(publish)
 
     def _setup_timers(self) -> None:
         self.timer = QTimer(self)
@@ -330,6 +389,7 @@ class MainWindow(QMainWindow):
         if self.config.redmine_url != previous_url:
             self.client = None
             self.current_user_id = None
+            self.history_widget.base_url = self.config.redmine_url
             after = self.refresh_issues if self.config.refresh_on_start else None
             self._connect_async(after)
         return True
@@ -342,7 +402,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Ошибка", message)
 
     def _show_info(self, message: str) -> None:
-        QMessageBox.information(self, "Информация", message)
+        self.statusBar().showMessage(message, 6000)
 
     def _show_offline_banner(self, text: str) -> None:
         palette = self.palette()
@@ -367,6 +427,7 @@ class MainWindow(QMainWindow):
             self.activateWindow()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.gui_settings.setValue("window/geometry", self.saveGeometry())
         if not self._tray_available or self.tray_icon is None:
             self._quit()
             return
@@ -469,7 +530,7 @@ class MainWindow(QMainWindow):
     def _apply_issues(self, api_issues: list[Issue]) -> None:
         merged = self._merge_pending_issues(list(api_issues))
         self.issues = {issue.id: issue for issue in self._sort_issues(merged)}
-        self._rebuild_issue_list()
+        self._rebuild_issue_lists()
 
     def _merge_pending_issues(self, issues: list[Issue]) -> list[Issue]:
         """Keep issues that disappeared from the open list but still have drafts."""
@@ -515,41 +576,101 @@ class MainWindow(QMainWindow):
 
         return sorted(issues, key=sort_key)
 
-    def _rebuild_issue_list(self) -> None:
-        stale = set(self.issue_widgets) - set(self.issues)
-        for issue_id in stale:
-            stale_widget = self.issue_widgets.pop(issue_id)
-            stale_widget.deleteLater()
+    def _rebuild_issue_lists(self) -> None:
+        pending_ids = set(self.database.pending_issue_subjects())
+        query = self.search_input.text().strip().lower()
 
-        if self.issues_layout.count():
-            last = self.issues_layout.itemAt(self.issues_layout.count() - 1)
-            if last is not None and last.spacerItem() is not None:
-                self.issues_layout.takeAt(self.issues_layout.count() - 1)
+        all_issues = [issue for issue in self.issues.values() if self._matches(issue, query)]
+        pending_issues = [issue for issue in all_issues if issue.id in pending_ids]
 
-        for issue_id, issue in self.issues.items():
-            widget: IssueWidget | None = self.issue_widgets.get(issue_id)
+        self._fill_issues(
+            self.all_layout,
+            self.all_widgets,
+            all_issues,
+            "Ничего не найдено" if query else "Задачи не загружены",
+        )
+        self._fill_issues(
+            self.pending_layout,
+            self.pending_widgets,
+            pending_issues,
+            "Ничего не найдено" if query else "Нет задач с черновиками",
+        )
+        self.tabs.setTabText(0, f"Сейчас ({len(pending_issues)})")
+        self.tabs.setTabText(1, f"Задачи ({len(all_issues)})")
+
+        self._update_active_panel()
+        self._update_draft_metric()
+
+    @staticmethod
+    def _matches(issue: Issue, query: str) -> bool:
+        if not query:
+            return True
+        return query in f"#{issue.id} {issue.subject}".lower()
+
+    def _create_issue_widget(self, issue: Issue) -> IssueWidget:
+        widget = IssueWidget(issue)
+        widget.add_track_requested.connect(self._add_new_track)
+        widget.continue_track_requested.connect(self._continue_track)
+        widget.continue_redmine_entry_requested.connect(self._continue_redmine_entry)
+        widget.pause_track_requested.connect(self._pause_track)
+        widget.edit_track_requested.connect(self._edit_track)
+        widget.publish_track_requested.connect(self._publish_track)
+        widget.cancel_track_requested.connect(self._cancel_track)
+        return widget
+
+    def _fill_issues(
+        self,
+        layout: QVBoxLayout,
+        registry: dict[int, IssueWidget],
+        issues: list[Issue],
+        empty_text: str,
+    ) -> None:
+        wanted = {issue.id for issue in issues}
+        for issue_id in set(registry) - wanted:
+            stale = registry.pop(issue_id)
+            stale.setParent(None)
+            stale.deleteLater()
+
+        while layout.count():
+            item = layout.takeAt(0)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None and widget not in registry.values():
+                widget.deleteLater()
+
+        for issue in issues:
+            widget = registry.get(issue.id)
             if widget is None:
-                widget = IssueWidget(issue)
-                widget.add_track_requested.connect(self._add_new_track)
-                widget.continue_track_requested.connect(self._continue_track)
-                widget.continue_redmine_entry_requested.connect(self._continue_redmine_entry)
-                widget.pause_track_requested.connect(self._pause_track)
-                widget.edit_track_requested.connect(self._edit_track)
-                widget.publish_track_requested.connect(self._publish_track)
-                widget.cancel_track_requested.connect(self._cancel_track)
-                self.issue_widgets[issue_id] = widget
-                self.issues_layout.addWidget(widget)
+                widget = self._create_issue_widget(issue)
+                registry[issue.id] = widget
             widget.update_issue(issue)
             widget.set_existing_entries(issue.time_entries[-5:])
-            widget.set_tracks(self.database.list_for_issue(issue_id))
+            widget.set_tracks(self.database.list_for_issue(issue.id))
+            layout.addWidget(widget)
 
-        self.issues_layout.addStretch()
-        self._update_draft_metric()
+        if not issues:
+            placeholder = QLabel(empty_text)
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet(muted_style(self))
+            layout.addWidget(placeholder)
+
+        layout.addStretch()
+
+    def _on_search_changed(self, _text: str) -> None:
+        self._rebuild_issue_lists()
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.history_widget:
+            self.history_widget.refresh()
+
+    def _update_active_panel(self) -> None:
+        self.active_panel.set_track(self.database.get_active())
 
     def _sort_and_rebuild(self) -> None:
         sorted_issues = self._sort_issues(list(self.issues.values()))
         self.issues = {issue.id: issue for issue in sorted_issues}
-        self._rebuild_issue_list()
+        self._rebuild_issue_lists()
 
     # ------------------------------------------------------------------
     # Metrics
@@ -655,10 +776,11 @@ class MainWindow(QMainWindow):
         if notify:
             self._sort_and_rebuild()
         else:
-            for issue_widget in self.issue_widgets.values():
-                for track_widget in issue_widget.track_widgets():
-                    if track_widget.track_id == track_id:
-                        track_widget.refresh(track)
+            for registry in (self.pending_widgets, self.all_widgets):
+                for issue_widget in registry.values():
+                    for track_widget in issue_widget.track_widgets():
+                        if track_widget.track_id == track_id:
+                            track_widget.refresh(track)
         return track
 
     def _edit_track(self, track_id: int) -> None:
@@ -683,7 +805,7 @@ class MainWindow(QMainWindow):
         track.description = dialog.description()
         track.date = dialog.track_date()
         self.database.save(track)
-        self._rebuild_issue_list()
+        self._rebuild_issue_lists()
 
     def _publish_track(self, track_id: int) -> None:
         if self._publishing:
@@ -846,19 +968,56 @@ class MainWindow(QMainWindow):
         self._sort_and_rebuild()
 
     def _open_history(self) -> None:
-        dialog = HistoryDialog(self.database, self.config.redmine_url, self)
-        dialog.exec()
+        self.history_widget.refresh()
+        self.tabs.setCurrentWidget(self.history_widget)
+
+    def _focus_search(self) -> None:
+        self.tabs.setCurrentWidget(self.all_page)
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _toggle_active(self) -> None:
+        active = self.database.get_active()
+        if active is not None and active.id is not None:
+            self._pause_track(active.id)
+            return
+        pending = self.database.list_pending()
+        if pending:
+            track = pending[0]
+            if track.id is not None:
+                self._continue_track(track.issue_id, track.id)
+
+    def _publish_active(self) -> None:
+        active = self.database.get_active()
+        if active is not None and active.id is not None:
+            self._publish_track(active.id)
+
+    def _update_tray_tooltip(self) -> None:
+        if self.tray_icon is None:
+            return
+        active = self.database.get_active()
+        if active is None:
+            self.tray_icon.setToolTip("Redmine Time Tracker")
+            return
+        self.tray_icon.setToolTip(
+            "Redmine Time Tracker\n"
+            f"#{active.issue_id} {active.issue_subject}\n"
+            f"{active.display_elapsed}"
+        )
 
     # ------------------------------------------------------------------
     # Timers
     # ------------------------------------------------------------------
     def _tick(self) -> None:
-        for issue_widget in self.issue_widgets.values():
-            for track_widget in issue_widget.track_widgets():
-                track_widget.update_display()
+        self.active_panel.update_display()
+        for registry in (self.pending_widgets, self.all_widgets):
+            for issue_widget in registry.values():
+                for track_widget in issue_widget.track_widgets():
+                    track_widget.update_display()
 
     def _heartbeat(self) -> None:
         try:
             self.service.heartbeat_active()
         except sqlite3.Error:
             logger.exception("Heartbeat failed")
+        self._update_tray_tooltip()

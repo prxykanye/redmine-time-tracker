@@ -15,6 +15,10 @@ def muted_color(widget: QWidget) -> str:
     return widget.palette().color(QPalette.ColorRole.PlaceholderText).name()
 
 
+def border_color(widget: QWidget) -> str:
+    return widget.palette().color(QPalette.ColorRole.Mid).name()
+
+
 def panel_style(widget: QWidget, selector: str = "QFrame") -> str:
     palette = widget.palette()
     background = palette.color(QPalette.ColorRole.AlternateBase).name()

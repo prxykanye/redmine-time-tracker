@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import QDate, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -17,14 +16,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QRadioButton,
-    QTableWidget,
-    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
 )
 
 from ..config import AppConfig, ConfigError, normalize_url
-from ..database import Database
 from ..models import Activity, LocalTrack, format_hm, format_hms, round_up_minutes
 from ..tracking import OrphanTrack, RecoveryMode
 from .theme import muted_style
@@ -319,69 +315,3 @@ class RecoveryDialog(QDialog):
         if self.until_now.isChecked():
             return RecoveryMode.UNTIL_NOW
         return RecoveryMode.UNTIL_HEARTBEAT
-
-
-class HistoryDialog(QDialog):
-    HEADERS = ("Дата", "Задача", "Вид деятельности", "Часы", "Запись", "Описание")
-
-    def __init__(
-        self,
-        database: Database,
-        base_url: str,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self.base_url = base_url
-        self.setWindowTitle("История публикаций")
-        self.resize(900, 500)
-        layout = QVBoxLayout(self)
-
-        self.table = QTableWidget(0, len(self.HEADERS))
-        self.table.setHorizontalHeaderLabels(list(self.HEADERS))
-        self.table.setColumnWidth(0, 90)
-        self.table.setColumnWidth(1, 260)
-        self.table.setColumnWidth(2, 140)
-        self.table.setColumnWidth(3, 70)
-        self.table.setColumnWidth(4, 80)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.cellDoubleClicked.connect(self._open_entry)
-        layout.addWidget(self.table)
-
-        hint = QLabel("Двойной клик по строке открывает запись времени в Redmine.")
-        hint.setStyleSheet(muted_style(self))
-        layout.addWidget(hint)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("Закрыть")
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._tracks = database.list_published(limit=500)
-        self._fill()
-
-    def _fill(self) -> None:
-        self.table.setRowCount(len(self._tracks))
-        for row, track in enumerate(self._tracks):
-            values = (
-                track.date.strftime("%d.%m.%Y"),
-                f"#{track.issue_id} {track.issue_subject}",
-                track.activity_name,
-                format_hm(round_up_minutes(track.elapsed_seconds)),
-                f"#{track.redmine_entry_id}" if track.redmine_entry_id else "—",
-                track.description,
-            )
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if column == 4:
-                    item.setData(Qt.ItemDataRole.UserRole, track.redmine_entry_id)
-                self.table.setItem(row, column, item)
-
-    def _open_entry(self, row: int, _column: int) -> None:
-        item = self.table.item(row, 4)
-        if item is None:
-            return
-        entry_id = item.data(Qt.ItemDataRole.UserRole)
-        if not entry_id:
-            return
-        QDesktopServices.openUrl(QUrl(f"{self.base_url}/time_entries/{entry_id}/edit"))

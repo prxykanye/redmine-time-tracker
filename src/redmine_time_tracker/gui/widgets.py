@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -24,7 +25,7 @@ from ..models import (
     format_hm,
     round_up_minutes,
 )
-from .theme import muted_style, panel_style
+from .theme import border_color, muted_style, panel_style
 
 GOLD = "#B8860B"
 GREEN = "#28A745"
@@ -103,6 +104,86 @@ class MetricsWidget(QWidget):
             frame.value_label.setToolTip("Нет связи с Redmine")  # type: ignore[attr-defined]
 
 
+class ActiveTrackPanel(QFrame):
+    """Always visible summary of the running track."""
+
+    pause_requested = Signal(int)
+    publish_requested = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.track_id = 0
+        self._base_elapsed = 0
+        self._mono_started = time.monotonic()
+        self._running = False
+
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet(panel_style(self, "ActiveTrackPanel"))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+
+        text_layout = QVBoxLayout()
+        self.title_label = QLabel("Нет активного трека")
+        self.title_label.setTextFormat(Qt.TextFormat.RichText)
+        text_layout.addWidget(self.title_label)
+
+        self.detail_label = QLabel("")
+        self.detail_label.setStyleSheet(muted_style(self))
+        text_layout.addWidget(self.detail_label)
+        layout.addLayout(text_layout, stretch=1)
+
+        self.time_label = QLabel("00:00:00")
+        self.time_label.setStyleSheet("font-family: monospace; font-size: 26px; font-weight: bold;")
+        layout.addWidget(self.time_label)
+
+        self.pause_btn = QPushButton("⏸ Пауза")
+        self.pause_btn.setToolTip("Поставить трек на паузу (Ctrl+Space)")
+        self.pause_btn.clicked.connect(lambda: self.pause_requested.emit(self.track_id))
+        layout.addWidget(self.pause_btn)
+
+        self.publish_btn = QPushButton("⬆ Опубликовать")
+        self.publish_btn.setToolTip("Опубликовать трек в Redmine (Ctrl+P)")
+        self.publish_btn.clicked.connect(lambda: self.publish_requested.emit(self.track_id))
+        layout.addWidget(self.publish_btn)
+
+        self.hide()
+
+    def set_track(self, track: LocalTrack | None) -> None:
+        if track is None or track.status is not TrackStatus.RUNNING:
+            self._running = False
+            self.hide()
+            return
+
+        self.track_id = track.id or 0
+        self._running = True
+        self._base_elapsed = max(0, int(track.elapsed_seconds))
+        if track.started_at:
+            self._base_elapsed += max(0, int((datetime.now() - track.started_at).total_seconds()))
+        self._mono_started = time.monotonic()
+
+        continuation = ""
+        if track.source_time_entry_id:
+            continuation = f" · продолжение #{track.source_time_entry_id}"
+        self.title_label.setText(f"<b>#{track.issue_id} {track.issue_subject}</b>{continuation}")
+        self.detail_label.setText(f"{track.activity_name} · {track.description or 'без описания'}")
+        self.show()
+        self.update_display()
+
+    def current_seconds(self) -> int:
+        total = self._base_elapsed
+        if self._running:
+            total += int(time.monotonic() - self._mono_started)
+        return max(0, total)
+
+    def update_display(self) -> None:
+        total = self.current_seconds()
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.time_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        self.publish_btn.setToolTip(f"Будет опубликовано {format_hm(round_up_minutes(total))} ч")
+
+
 class TrackWidget(QWidget):
     start_requested = Signal(int)
     pause_requested = Signal(int)
@@ -159,7 +240,6 @@ class TrackWidget(QWidget):
         self._running = track.status is TrackStatus.RUNNING
         self._base_elapsed = max(0, int(track.elapsed_seconds))
         if self._running and track.started_at:
-            # Time between the last heartbeat and building this widget.
             self._base_elapsed += max(0, int((datetime.now() - track.started_at).total_seconds()))
         self._mono_started = time.monotonic()
 
@@ -177,14 +257,14 @@ class TrackWidget(QWidget):
         self.pause_btn.setEnabled(self._running)
         self.update_display()
 
-    def _current_seconds(self) -> int:
+    def current_seconds(self) -> int:
         total = self._base_elapsed
         if self._running:
             total += int(time.monotonic() - self._mono_started)
         return max(0, total)
 
     def update_display(self) -> None:
-        total = self._current_seconds()
+        total = self.current_seconds()
         hours, remainder = divmod(total, 3600)
         minutes, seconds = divmod(remainder, 60)
         self.time_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
@@ -244,6 +324,13 @@ class IssueWidget(QFrame):
         header.addWidget(self.meta_label)
         layout.addLayout(header)
 
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(True)
+        self.progress.setMaximumHeight(14)
+        self.progress.setToolTip("Отношение затраченного времени к оценке")
+        layout.addWidget(self.progress)
+
         self.existing_layout = QVBoxLayout()
         self.existing_layout.setSpacing(4)
         layout.addLayout(self.existing_layout)
@@ -264,13 +351,29 @@ class IssueWidget(QFrame):
             suffix = " <span style='color:#C77700;'>(нет в списке открытых задач)</span>"
         self.title_label.setText(f"<b>{issue.display_name}</b>{suffix}")
 
-        percent = issue.progress_percent
-        color = progress_color(percent)
-        self.meta_label.setText(
-            f"Затрачено: {issue.total_spent_hours:.1f}h / "
-            f"{issue.estimated_hours or 0:.1f}h "
-            f"(<span style='color:{color};'>{percent:.0f}%</span>)"
-        )
+        if issue.estimated_hours:
+            percent = issue.progress_percent
+            color = progress_color(percent)
+            border = border_color(self)
+            self.progress.setValue(int(min(percent, 100)))
+            self.progress.setFormat(f"{percent:.0f}%")
+            self.progress.setStyleSheet(
+                f"QProgressBar {{ border: 1px solid {border}; border-radius: 3px; "
+                "text-align: center; }"
+                f"QProgressBar::chunk {{ background-color: {color}; border-radius: 2px; }}"
+            )
+            self.meta_label.setText(
+                f"{issue.total_spent_hours:.1f}h / {issue.estimated_hours:.1f}h"
+            )
+        else:
+            border = border_color(self)
+            self.progress.setValue(0)
+            self.progress.setFormat("без плана")
+            self.progress.setStyleSheet(
+                f"QProgressBar {{ border: 1px solid {border}; border-radius: 3px; "
+                "text-align: center; }"
+            )
+            self.meta_label.setText(f"Затрачено: {issue.total_spent_hours:.1f}h")
 
     def set_existing_entries(self, entries: list[TimeEntry]) -> None:
         self._clear(self.existing_layout)

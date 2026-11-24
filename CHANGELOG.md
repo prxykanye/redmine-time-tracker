@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format follows
 - Metrics plan is prorated by the working days elapsed in the period.
 - Window closing falls back to a normal quit when no system tray is available.
 - The issue list, drafts and timers stay usable while a request is in flight.
+- The window is split into three tabs: active drafts, all issues and the
+  publication history.
+- The running track sits in a fixed panel with a large timer and controls.
+- Success messages go to the status bar instead of a modal dialog.
 
 ### Added
 
@@ -32,6 +36,9 @@ All notable changes to this project are documented here. The format follows
 - Background worker for connection, refresh and publishing.
 - One paginated request for the recent entries of all issues.
 - Unpublished draft total next to the period metrics.
+- Search by issue number or subject, progress bars and keyboard shortcuts.
+- Publication history tab with a month filter and links to Redmine entries.
+- Window geometry is remembered between launches.
 - Test suite, ruff, mypy, pre-commit and GitHub Actions.
 
 ### Fixed
