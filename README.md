@@ -42,6 +42,7 @@ draft never touches the network. Only publishing does.
   controls, visible regardless of the scroll position.
 - Compact always-on-top window for the running track, toggled with `Ctrl+M`.
 - Search by issue number or subject across both issue tabs.
+- Issue titles open the issue in Redmine.
 - Progress bars for estimate usage.
 - Local publication history with a month filter and a link to the Redmine entry.
 - Keyboard shortcuts and a window geometry remembered between launches.

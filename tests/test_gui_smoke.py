@@ -49,7 +49,12 @@ class FakeClient:
     def get_assigned_open_issues(self, user_id) -> list[Issue]:
         return [
             Issue(id=101, subject="Fix parser", estimated_hours=4.0, total_spent_hours=1.0),
-            Issue(id=102, subject="Write tests", estimated_hours=None, total_spent_hours=0.0),
+            Issue(
+                id=102,
+                subject="Write tests <b>now</b>",
+                estimated_hours=None,
+                total_spent_hours=0.0,
+            ),
         ]
 
     def get_time_entries_for_issues(
@@ -144,19 +149,21 @@ def test_dashboard_loads_and_search_filters(qapp, window) -> None:
     assert len(cached_issues) == 2
     assert cached_activities
 
+    title = window.all_widgets[102].title_label.text()
+    assert "&lt;b&gt;now&lt;/b&gt;" in title
+    assert "<b>now</b>" not in title
+    assert "https://redmine.example.com/issues/101" in (window.all_widgets[101].title_label.text())
+
     window.search_input.setText("parser")
-    qapp.processEvents()
-    assert set(window.all_widgets) == {101}
+    assert wait_until(qapp, lambda: set(window.all_widgets) == {101})
     assert window.tabs.tabText(0) == "Сейчас (1)"
 
     window.search_input.setText("nothing-matches")
-    qapp.processEvents()
-    assert window.all_widgets == {}
+    assert wait_until(qapp, lambda: window.all_widgets == {})
     assert window.tabs.tabText(1) == "Задачи (0)"
 
     window.search_input.clear()
-    qapp.processEvents()
-    assert len(window.all_widgets) == 2
+    assert wait_until(qapp, lambda: len(window.all_widgets) == 2)
 
 
 def test_track_lifecycle_and_compact_mode(qapp, window) -> None:

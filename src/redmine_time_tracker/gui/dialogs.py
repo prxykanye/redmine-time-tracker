@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
@@ -230,8 +231,8 @@ class PublishTrackDialog(QDialog):
         summary = QLabel(
             f"<b>Задача #{track.issue_id}</b><br>"
             f"Дата: {track.date.strftime('%d.%m.%Y')}<br>"
-            f"Вид деятельности: {track.activity_name}<br>"
-            f"Описание: {track.description or '—'}<br>"
+            f"Вид деятельности: {escape(track.activity_name)}<br>"
+            f"Описание: {escape(track.description) or '—'}<br>"
             f"Зафиксировано: {format_hms(track.current_elapsed_seconds())}<br>"
             f"Будет опубликовано: <b>{format_hm(round_up_minutes(track.current_elapsed_seconds()))} ч</b>"
             " (округление вверх до 5 минут)"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from html import escape
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -165,8 +166,11 @@ class ActiveTrackPanel(QFrame):
         continuation = ""
         if track.source_time_entry_id:
             continuation = f" · продолжение #{track.source_time_entry_id}"
-        self.title_label.setText(f"<b>#{track.issue_id} {track.issue_subject}</b>{continuation}")
-        self.detail_label.setText(f"{track.activity_name} · {track.description or 'без описания'}")
+        self.title_label.setText(
+            f"<b>#{track.issue_id} {escape(track.issue_subject)}</b>{continuation}"
+        )
+        description = escape(track.description) if track.description else "без описания"
+        self.detail_label.setText(f"{escape(track.activity_name)} · {description}")
         self.show()
         self.update_display()
 
@@ -248,10 +252,10 @@ class TrackWidget(QWidget):
             continuation = (
                 f" <span style='color:#17A2B8;'>(продолжение #{track.source_time_entry_id})</span>"
             )
+        description = escape(track.description) if track.description else "<i>без описания</i>"
         self.info_label.setText(
-            f"<b>{track.activity_name}</b>{continuation} | "
-            f"{track.date.strftime('%d.%m.%Y')}<br>"
-            f"{track.description or '<i>без описания</i>'}"
+            f"<b>{escape(track.activity_name)}</b>{continuation} | "
+            f"{track.date.strftime('%d.%m.%Y')}<br>{description}"
         )
         self.start_btn.setEnabled(not self._running)
         self.pause_btn.setEnabled(self._running)
@@ -280,9 +284,11 @@ class ExistingEntryWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
 
+        comments = escape(entry.comments) if entry.comments else "<i>без описания</i>"
         info = QLabel(
-            f"<b>{entry.activity_name}</b> | {entry.spent_on.strftime('%d.%m.%Y')} | "
-            f"{entry.hours:.2f} ч<br>{entry.comments or '<i>без описания</i>'}"
+            f"<b>{escape(entry.activity_name)}</b> | "
+            f"{entry.spent_on.strftime('%d.%m.%Y')} | "
+            f"{entry.hours:.2f} ч<br>{comments}"
         )
         info.setWordWrap(True)
         layout.addWidget(info, stretch=1)
@@ -302,9 +308,15 @@ class IssueWidget(QFrame):
     publish_track_requested = Signal(int)
     cancel_track_requested = Signal(int)
 
-    def __init__(self, issue: Issue, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        issue: Issue,
+        base_url: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.issue_id = issue.id
+        self.base_url = base_url
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(panel_style(self, "IssueWidget"))
 
@@ -314,6 +326,8 @@ class IssueWidget(QFrame):
         header = QHBoxLayout()
         self.title_label = QLabel()
         self.title_label.setWordWrap(True)
+        self.title_label.setOpenExternalLinks(True)
+        self.title_label.setTextFormat(Qt.TextFormat.RichText)
         header.addWidget(self.title_label, stretch=1)
 
         self.local_label = QLabel()
@@ -346,10 +360,15 @@ class IssueWidget(QFrame):
         self.update_issue(issue)
 
     def update_issue(self, issue: Issue) -> None:
-        suffix = ""
+        name = escape(issue.display_name)
+        if self.base_url:
+            href = escape(f"{self.base_url}/issues/{issue.id}", quote=True)
+            title = f'<b><a href="{href}">{name}</a></b>'
+        else:
+            title = f"<b>{name}</b>"
         if issue.local_only:
-            suffix = " <span style='color:#C77700;'>(нет в списке открытых задач)</span>"
-        self.title_label.setText(f"<b>{issue.display_name}</b>{suffix}")
+            title += " <span style='color:#C77700;'>(нет в списке открытых задач)</span>"
+        self.title_label.setText(title)
 
         if issue.estimated_hours:
             percent = issue.progress_percent

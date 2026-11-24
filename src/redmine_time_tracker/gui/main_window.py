@@ -164,6 +164,11 @@ class MainWindow(QMainWindow):
         self.search_input.textChanged.connect(self._on_search_changed)
         layout.addWidget(self.search_input)
 
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(150)
+        self.search_timer.timeout.connect(self._rebuild_issue_lists)
+
         self.active_panel = ActiveTrackPanel()
         self.active_panel.pause_requested.connect(self._pause_track)
         self.active_panel.publish_requested.connect(self._publish_track)
@@ -603,17 +608,20 @@ class MainWindow(QMainWindow):
 
         all_issues = [issue for issue in self.issues.values() if self._matches(issue, query)]
         pending_issues = [issue for issue in all_issues if issue.id in pending_ids]
+        tracks = self.database.tracks_by_issue(list(self.issues))
 
         self._fill_issues(
             self.all_layout,
             self.all_widgets,
             all_issues,
+            tracks,
             "Ничего не найдено" if query else "Задачи не загружены",
         )
         self._fill_issues(
             self.pending_layout,
             self.pending_widgets,
             pending_issues,
+            tracks,
             "Ничего не найдено" if query else "Нет задач с черновиками",
         )
         self.tabs.setTabText(0, f"Сейчас ({len(pending_issues)})")
@@ -629,7 +637,7 @@ class MainWindow(QMainWindow):
         return query in f"#{issue.id} {issue.subject}".lower()
 
     def _create_issue_widget(self, issue: Issue) -> IssueWidget:
-        widget = IssueWidget(issue)
+        widget = IssueWidget(issue, base_url=self.config.redmine_url)
         widget.add_track_requested.connect(self._add_new_track)
         widget.continue_track_requested.connect(self._continue_track)
         widget.continue_redmine_entry_requested.connect(self._continue_redmine_entry)
@@ -644,6 +652,7 @@ class MainWindow(QMainWindow):
         layout: QVBoxLayout,
         registry: dict[int, IssueWidget],
         issues: list[Issue],
+        tracks: dict[int, list[LocalTrack]],
         empty_text: str,
     ) -> None:
         wanted = {issue.id for issue in issues}
@@ -665,9 +674,10 @@ class MainWindow(QMainWindow):
             if widget is None:
                 widget = self._create_issue_widget(issue)
                 registry[issue.id] = widget
+            widget.base_url = self.config.redmine_url
             widget.update_issue(issue)
             widget.set_existing_entries(issue.time_entries[-5:])
-            widget.set_tracks(self.database.list_for_issue(issue.id))
+            widget.set_tracks(tracks.get(issue.id, []))
             layout.addWidget(widget)
 
         if not issues:
@@ -679,7 +689,7 @@ class MainWindow(QMainWindow):
         layout.addStretch()
 
     def _on_search_changed(self, _text: str) -> None:
-        self._rebuild_issue_lists()
+        self.search_timer.start()
 
     def _on_tab_changed(self, index: int) -> None:
         if self.tabs.widget(index) is self.history_widget:

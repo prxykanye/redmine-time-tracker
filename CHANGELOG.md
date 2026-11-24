@@ -47,6 +47,10 @@ All notable changes to this project are documented here. The format follows
 
 - `TimeEntry` was referenced without an import in `gui/widgets.py`, which broke
   the application on Python 3.13.
+- Issue subjects, descriptions and activity names are now HTML-escaped before
+  rendering, so markup characters in Redmine data cannot break the card layout.
+- Rebuilding the issue tabs runs one grouped track query instead of one query
+  per issue per tab; the search field is debounced.
 - A draft with zero tracked seconds could be published as 5 minutes.
 - A cancelled publish dialog paused the running draft.
 - Issues with drafts disappeared when they left the open issue list.

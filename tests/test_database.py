@@ -135,6 +135,23 @@ def test_pending_issue_subjects(db: Database, make_track: TrackFactory) -> None:
     assert db.pending_issue_subjects() == {10: "First", 20: "Second"}
 
 
+def test_tracks_by_issue_groups_and_filters(db: Database, make_track: TrackFactory) -> None:
+    first = db.save(make_track(issue_id=10, issue_subject="First"))
+    second = db.save(make_track(issue_id=20, issue_subject="Second"))
+    third = db.save(make_track(issue_id=10, issue_subject="First", description="another"))
+    cancelled = db.save(
+        make_track(issue_id=10, issue_subject="First", status=TrackStatus.CANCELLED)
+    )
+
+    grouped = db.tracks_by_issue([10, 20])
+    assert {track.id for track in grouped[10]} == {first.id, third.id}
+    assert [track.id for track in grouped[20]] == [second.id]
+
+    with_cancelled = db.tracks_by_issue([10], include_cancelled=True)
+    assert {track.id for track in with_cancelled[10]} == {first.id, third.id, cancelled.id}
+    assert db.tracks_by_issue([]) == {}
+
+
 def test_migration_from_legacy_schema(tmp_path) -> None:
     path = tmp_path / "legacy.db"
     connection = sqlite3.connect(path)

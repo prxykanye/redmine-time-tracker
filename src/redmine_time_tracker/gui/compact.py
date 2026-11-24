@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from html import escape
 
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QKeyEvent, QMouseEvent
@@ -90,8 +91,9 @@ class CompactWindow(QWidget):
             self._base_elapsed += max(0, int((datetime.now() - track.started_at).total_seconds()))
         self._mono_started = time.monotonic()
 
-        self.title_label.setText(f"#{track.issue_id} {track.issue_subject}")
-        self.detail_label.setText(f"{track.activity_name} · {track.description or 'без описания'}")
+        self.title_label.setText(f"#{track.issue_id} {escape(track.issue_subject)}")
+        description = escape(track.description) if track.description else "без описания"
+        self.detail_label.setText(f"{escape(track.activity_name)} · {description}")
         self.pause_btn.setEnabled(True)
         self.publish_btn.setEnabled(True)
         self.update_display()

@@ -221,6 +221,35 @@ class Database:
             (issue_id, TrackStatus.CANCELLED.value),
         )
 
+    def tracks_by_issue(
+        self,
+        issue_ids: list[int],
+        include_cancelled: bool = False,
+    ) -> dict[int, list[LocalTrack]]:
+        """Return tracks for many issues in a single query."""
+        unique = list(dict.fromkeys(issue_ids))
+        if not unique:
+            return {}
+
+        placeholders = ",".join("?" for _ in unique)
+        params: list[object] = list(unique)
+        where = f"issue_id IN ({placeholders})"
+        if not include_cancelled:
+            where += " AND status != ?"
+            params.append(TrackStatus.CANCELLED.value)
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM local_tracks WHERE {where} ORDER BY created_at DESC",
+                tuple(params),
+            ).fetchall()
+
+        grouped: dict[int, list[LocalTrack]] = {}
+        for row in rows:
+            track = self._row_to_track(row)
+            grouped.setdefault(track.issue_id, []).append(track)
+        return grouped
+
     def list_published(self, limit: int = 200) -> list[LocalTrack]:
         return self._list(
             "status = ? ORDER BY published_at DESC LIMIT ?",
