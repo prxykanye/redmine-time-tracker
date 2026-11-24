@@ -38,6 +38,8 @@ All notable changes to this project are documented here. The format follows
 - Unpublished draft total next to the period metrics.
 - Search by issue number or subject, progress bars and keyboard shortcuts.
 - Publication history tab with a month filter and links to Redmine entries.
+- Compact always-on-top window with the running timer and controls.
+- Headless GUI test for tabs, search, track lifecycle and history.
 - Window geometry is remembered between launches.
 - Test suite, ruff, mypy, pre-commit and GitHub Actions.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from datetime import date
 
@@ -7,6 +8,8 @@ import pytest
 
 from redmine_time_tracker.database import Database
 from redmine_time_tracker.models import LocalTrack, TrackStatus
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 TrackFactory = Callable[..., LocalTrack]
 

@@ -40,6 +40,7 @@ draft never touches the network. Only publishing does.
   and the local publication history.
 - Sticky panel with the running track, its live timer and the pause/publish
   controls, visible regardless of the scroll position.
+- Compact always-on-top window for the running track, toggled with `Ctrl+M`.
 - Search by issue number or subject across both issue tabs.
 - Progress bars for estimate usage.
 - Local publication history with a month filter and a link to the Redmine entry.
@@ -72,6 +73,16 @@ With `pipx`:
 pipx install git+https://github.com/prxykanye/redmine-time-tracker.git
 redmine-time-tracker
 ```
+
+Build a wheel and install it:
+
+```bash
+uv build
+pipx install dist/redmine_time_tracker-0.2.0-py3-none-any.whl
+```
+
+Pushing a `v*` tag builds the sdist and wheel and attaches them to a GitHub
+release.
 
 ## First run
 
@@ -112,6 +123,8 @@ The confirmation dialog always shows both the tracked and the rounded value.
 | `Ctrl+F` | Focus the search field |
 | `Ctrl+Space` | Start the most recent draft, or pause the running one |
 | `Ctrl+P` | Publish the running draft |
+| `Ctrl+M` | Toggle the compact always-on-top window |
+| `Esc` | Leave compact mode |
 
 ## Time recovery
 
@@ -155,8 +168,9 @@ uv run pytest
 
 The test suite covers rounding, storage migrations, the partial unique index on
 continuations, heartbeat and recovery logic, configuration, metric proration,
-the offline cache and the API client pagination. It runs without a Redmine
-server and without a display.
+the offline cache, the API client pagination and a headless GUI pass over the
+tabs, search, track lifecycle, compact mode and history. It runs without a
+Redmine server and without a display.
 
 The README screenshot is rendered from demo data, no Redmine instance needed:
 

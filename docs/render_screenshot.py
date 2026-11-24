@@ -11,6 +11,7 @@ from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from redmine_time_tracker.config import AppConfig
@@ -146,7 +147,12 @@ def main() -> int:
             elapsed_seconds=1800,
         )
     )
-    window = MainWindow(AppConfig(base, environ={}), database, client_factory=DemoClient)
+    window = MainWindow(
+        AppConfig(base, environ={}),
+        database,
+        client_factory=DemoClient,
+        gui_settings=QSettings(str(base / "settings.ini"), QSettings.Format.IniFormat),
+    )
     window.resize(1240, 860)
     window.show()
     assert wait(app, lambda: len(window.issues) == 3)

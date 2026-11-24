@@ -35,6 +35,7 @@ from ..models import Activity, Issue, LocalTrack, TimeEntry, TrackStatus, round_
 from ..redmine_client import RedmineClient, RedmineConnectionError, RedmineError
 from ..sync import DashboardData, fetch_dashboard
 from ..tracking import ORPHAN_THRESHOLD, RecoveryMode, TrackService
+from .compact import CompactWindow
 from .dialogs import (
     AddTrackDialog,
     ApiKeyDialog,
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         config: AppConfig,
         database: Database,
         client_factory: Callable[[str, str], RedmineClient] = RedmineClient,
+        gui_settings: QSettings | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -94,12 +96,18 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Redmine Time Tracker")
         self.setMinimumSize(900, 600)
 
-        self.gui_settings = QSettings("redmine-time-tracker", "redmine-time-tracker")
+        self.gui_settings = gui_settings or QSettings(
+            "redmine-time-tracker", "redmine-time-tracker"
+        )
         geometry = self.gui_settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
 
         self._build_ui()
+        self.compact_window = CompactWindow()
+        self.compact_window.pause_requested.connect(self._pause_track)
+        self.compact_window.publish_requested.connect(self._publish_track)
+        self.compact_window.restore_requested.connect(lambda: self._toggle_compact(False))
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
         if self._tray_available:
             self._build_tray()
@@ -203,6 +211,10 @@ class MainWindow(QMainWindow):
         refresh_action.triggered.connect(self.refresh_issues)
         tray_menu.addAction(refresh_action)
 
+        compact_action = QAction("Компактный режим", self)
+        compact_action.triggered.connect(lambda: self._toggle_compact(True))
+        tray_menu.addAction(compact_action)
+
         tray_menu.addSeparator()
         quit_action = QAction("Выход", self)
         quit_action.triggered.connect(self._quit)
@@ -232,6 +244,13 @@ class MainWindow(QMainWindow):
         quit_action = QAction("Выход", self)
         quit_action.triggered.connect(self._quit)
         file_menu.addAction(quit_action)
+
+        view_menu = menubar.addMenu("Вид")
+        self.compact_action = QAction("Компактный режим", self)
+        self.compact_action.setCheckable(True)
+        self.compact_action.setShortcut("Ctrl+M")
+        self.compact_action.toggled.connect(self._toggle_compact)
+        view_menu.addAction(self.compact_action)
 
     def _build_shortcuts(self) -> None:
         refresh = QAction(self)
@@ -447,6 +466,8 @@ class MainWindow(QMainWindow):
         for running in self.database.list_running():
             if running.id is not None:
                 self.service.pause(running.id)
+        self.gui_settings.setValue("compact/position", self.compact_window.pos())
+        self.compact_window.hide()
         if self.tray_icon is not None:
             self.tray_icon.hide()
         QApplication.quit()
@@ -665,7 +686,26 @@ class MainWindow(QMainWindow):
             self.history_widget.refresh()
 
     def _update_active_panel(self) -> None:
-        self.active_panel.set_track(self.database.get_active())
+        active = self.database.get_active()
+        self.active_panel.set_track(active)
+        self.compact_window.set_track(active)
+
+    def _toggle_compact(self, enabled: bool) -> None:
+        if enabled:
+            self.compact_window.set_track(self.database.get_active())
+            self.compact_window.restore_position(self.gui_settings.value("compact/position"))
+            self.compact_window.show()
+            self.hide()
+        else:
+            self.gui_settings.setValue("compact/position", self.compact_window.pos())
+            self.compact_window.hide()
+            self.showNormal()
+            self.activateWindow()
+
+        if self.compact_action.isChecked() != enabled:
+            self.compact_action.blockSignals(True)
+            self.compact_action.setChecked(enabled)
+            self.compact_action.blockSignals(False)
 
     def _sort_and_rebuild(self) -> None:
         sorted_issues = self._sort_issues(list(self.issues.values()))
@@ -1010,6 +1050,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _tick(self) -> None:
         self.active_panel.update_display()
+        self.compact_window.update_display()
         for registry in (self.pending_widgets, self.all_widgets):
             for issue_widget in registry.values():
                 for track_widget in issue_widget.track_widgets():
