@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import date, datetime, timedelta
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtGui import QAction, QCloseEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -25,8 +28,10 @@ from PySide6.QtWidgets import (
 
 from ..config import AppConfig
 from ..database import Database
-from ..models import Activity, Issue, LocalTrack, TrackStatus
-from ..redmine_client import RedmineClient, RedmineError
+from ..metrics import compute_metrics
+from ..models import Activity, Issue, LocalTrack, TimeEntry, TrackStatus, round_up_minutes
+from ..redmine_client import RedmineClient, RedmineConnectionError, RedmineError
+from ..sync import DashboardData, fetch_dashboard
 from ..tracking import ORPHAN_THRESHOLD, RecoveryMode, TrackService
 from .dialogs import (
     AddTrackDialog,
@@ -38,24 +43,21 @@ from .dialogs import (
     SettingsDialog,
 )
 from .widgets import IssueWidget, MetricsWidget
+from .workers import Worker
 
-DAILY_WORK_HOURS = 8.0
 HEARTBEAT_INTERVAL_MS = 30_000
 
 logger = logging.getLogger(__name__)
 
 
-def workdays_in_range(start: date, end: date) -> int:
-    """Count weekdays between two dates, inclusive."""
-    if end < start:
-        return 0
-    count = 0
-    current = start
-    while current <= end:
-        if current.weekday() < 5:
-            count += 1
-        current += timedelta(days=1)
-    return count
+@dataclass(frozen=True)
+class PublishPlan:
+    track_id: int
+    mode: str
+    rounded_hours: float
+    display: str
+    was_running: bool
+    entry_id: int | None
 
 
 class MainWindow(QMainWindow):
@@ -63,13 +65,14 @@ class MainWindow(QMainWindow):
         self,
         config: AppConfig,
         database: Database,
-        client_factory: type[RedmineClient] = RedmineClient,
+        client_factory: Callable[[str, str], RedmineClient] = RedmineClient,
     ) -> None:
         super().__init__()
         self.config = config
         self.database = database
         self.client_factory = client_factory
         self.service = TrackService(database)
+        self.pool = QThreadPool.globalInstance()
 
         self.client: RedmineClient | None = None
         self.current_user_id: int | None = None
@@ -77,6 +80,11 @@ class MainWindow(QMainWindow):
         self.activities: list[Activity] = []
         self.issue_widgets: dict[int, IssueWidget] = {}
         self.tray_icon: QSystemTrayIcon | None = None
+
+        self._workers: set[Worker] = set()
+        self._connecting = False
+        self._refreshing = False
+        self._publishing = False
         self._tray_notice_shown = False
 
         self.setWindowTitle("Redmine Time Tracker")
@@ -122,6 +130,11 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Готово")
         toolbar.addWidget(self.status_label)
         layout.addLayout(toolbar)
+
+        self.offline_label = QLabel("")
+        self.offline_label.setWordWrap(True)
+        self.offline_label.hide()
+        layout.addWidget(self.offline_label)
 
         self.metrics = MetricsWidget()
         layout.addWidget(self.metrics)
@@ -191,8 +204,26 @@ class MainWindow(QMainWindow):
         self.heartbeat_timer.timeout.connect(self._heartbeat)
         self.heartbeat_timer.start(HEARTBEAT_INTERVAL_MS)
 
+    def _run(
+        self,
+        fn: Callable[[], Any],
+        on_success: Callable[[Any], None],
+        on_failure: Callable[[BaseException], None],
+    ) -> None:
+        worker = Worker(fn)
+        self._workers.add(worker)
+
+        def release(*_args: object) -> None:
+            self._workers.discard(worker)
+
+        worker.signals.succeeded.connect(on_success)
+        worker.signals.failed.connect(on_failure)
+        worker.signals.succeeded.connect(release)
+        worker.signals.failed.connect(release)
+        self.pool.start(worker)
+
     # ------------------------------------------------------------------
-    # Startup
+    # Startup and connection
     # ------------------------------------------------------------------
     def _startup(self) -> None:
         self._recover_orphan_track()
@@ -228,47 +259,67 @@ class MainWindow(QMainWindow):
         if not self.config.redmine_api_key and not self._show_api_key_dialog():
             self.status_label.setText("Укажите API-ключ Redmine")
             return
-        if not self._init_client():
+        if self.client is None and not self._connecting:
+            after = self.refresh_issues if self.config.refresh_on_start else None
+            self._connect_async(after)
+
+    def _connect_async(self, after: Callable[[], None] | None = None) -> None:
+        if self._connecting:
             return
-        if self.config.refresh_on_start:
-            self.refresh_issues()
+        url = self.config.redmine_url
+        key = self.config.redmine_api_key
+        if not url or not key:
+            return
 
-    # ------------------------------------------------------------------
-    # Connection
-    # ------------------------------------------------------------------
-    def _init_client(self) -> bool:
-        if not self.config.redmine_url or not self.config.redmine_api_key:
-            return False
-        try:
-            client = self.client_factory(
-                self.config.redmine_url,
-                self.config.redmine_api_key,
-            )
-            user = client.get_current_user()
-        except RedmineError as exc:
-            logger.warning("Cannot connect to Redmine: %s", exc)
-            self.client = None
-            self._show_error(str(exc))
-            return False
+        self._connecting = True
+        self.status_label.setText("Подключение к Redmine...")
+        factory = self.client_factory
 
+        def job() -> tuple[Any, dict[str, Any]]:
+            client = factory(url, key)
+            return client, client.get_current_user()
+
+        self._run(
+            job,
+            lambda result: self._on_connected(result, after),
+            self._on_connect_failed,
+        )
+
+    def _on_connected(
+        self,
+        result: tuple[Any, dict[str, Any]],
+        after: Callable[[], None] | None,
+    ) -> None:
+        client, user = result
         self.client = client
         self.current_user_id = user.get("id")
+        self._connecting = False
+
         name = f"{user.get('firstname', '')} {user.get('lastname', '')}".strip()
         title = "Redmine Time Tracker"
         if name:
             title = f"{title} — {name}"
         self.setWindowTitle(title)
-        return True
+        self.status_label.setText("Готово")
+        if after is not None:
+            after()
+
+    def _on_connect_failed(self, exc: BaseException) -> None:
+        self._connecting = False
+        self.client = None
+        self.current_user_id = None
+        logger.warning("Cannot connect to Redmine: %s", exc)
+        self.status_label.setText("Нет подключения к Redmine")
+        self._show_error(str(exc))
 
     def _show_api_key_dialog(self) -> bool:
         dialog = ApiKeyDialog(self.config, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         self.client = None
-        if not self._init_client():
-            return False
-        if self.config.refresh_on_start:
-            self.refresh_issues()
+        self.current_user_id = None
+        after = self.refresh_issues if self.config.refresh_on_start else None
+        self._connect_async(after)
         return True
 
     def _show_settings(self, require_url: bool = False) -> bool:
@@ -278,8 +329,9 @@ class MainWindow(QMainWindow):
             return False
         if self.config.redmine_url != previous_url:
             self.client = None
-            if self._init_client() and self.config.refresh_on_start:
-                self.refresh_issues()
+            self.current_user_id = None
+            after = self.refresh_issues if self.config.refresh_on_start else None
+            self._connect_async(after)
         return True
 
     # ------------------------------------------------------------------
@@ -291,6 +343,20 @@ class MainWindow(QMainWindow):
 
     def _show_info(self, message: str) -> None:
         QMessageBox.information(self, "Информация", message)
+
+    def _show_offline_banner(self, text: str) -> None:
+        palette = self.palette()
+        background = palette.color(QPalette.ColorRole.ToolTipBase).name()
+        foreground = palette.color(QPalette.ColorRole.ToolTipText).name()
+        self.offline_label.setStyleSheet(
+            f"background-color: {background}; color: {foreground}; "
+            "padding: 6px; border-radius: 4px;"
+        )
+        self.offline_label.setText(text)
+        self.offline_label.show()
+
+    def _hide_offline_banner(self) -> None:
+        self.offline_label.hide()
 
     # ------------------------------------------------------------------
     # Tray and window lifecycle
@@ -328,34 +394,82 @@ class MainWindow(QMainWindow):
     # Refresh
     # ------------------------------------------------------------------
     def refresh_issues(self) -> None:
-        if self.client is None and not self._init_client():
+        if self._refreshing:
             return
+        if self.client is None:
+            self._connect_async(self.refresh_issues)
+            return
+        user_id = self.current_user_id
+        if user_id is None:
+            self.status_label.setText("Redmine не вернул текущего пользователя")
+            return
+
         client = self.client
-        if client is None:
-            return
+        today = date.today()
+        month_start = today.replace(day=1)
 
-        self.status_label.setText("Загрузка задач...")
+        self._refreshing = True
         self.refresh_btn.setEnabled(False)
-        try:
-            if self.current_user_id is None:
-                raise RedmineError("Redmine не вернул текущего пользователя")
-            self.activities = client.get_activities()
-            issues = client.get_assigned_open_issues(self.current_user_id)
-            for issue in issues:
-                issue.time_entries = client.get_time_entries_for_issue(issue.id, limit=5)
-        except RedmineError as exc:
-            logger.warning("Refresh failed: %s", exc)
-            self.status_label.setText("Ошибка загрузки задач")
-            self._show_error(str(exc))
-            return
-        finally:
-            self.refresh_btn.setEnabled(True)
+        self.status_label.setText("Загрузка задач...")
+        self._run(
+            lambda: fetch_dashboard(client, user_id, month_start, today),
+            self._on_dashboard_loaded,
+            self._on_refresh_failed,
+        )
 
-        issues = self._merge_pending_issues(issues)
-        self.issues = {issue.id: issue for issue in self._sort_issues(issues)}
-        self._rebuild_issue_list()
-        self._update_metrics()
+    def _on_dashboard_loaded(self, data: Any) -> None:
+        dashboard: DashboardData = data
+        self._refreshing = False
+        self.refresh_btn.setEnabled(True)
+        self.activities = dashboard.activities
+
+        try:
+            self.database.replace_cache(
+                dashboard.issues,
+                dashboard.activities,
+                dashboard.fetched_at,
+            )
+        except sqlite3.Error:
+            logger.exception("Failed to cache the issue list")
+
+        self._apply_issues(dashboard.issues)
+        self._update_metrics(dashboard.period_entries)
+        self._hide_offline_banner()
         self.status_label.setText(f"Загружено задач: {len(self.issues)}")
+
+    def _on_refresh_failed(self, exc: BaseException) -> None:
+        self._refreshing = False
+        self.refresh_btn.setEnabled(True)
+        logger.warning("Refresh failed: %s", exc)
+        if isinstance(exc, RedmineConnectionError):
+            self._load_from_cache(str(exc))
+            return
+        self.status_label.setText("Ошибка загрузки задач")
+        if isinstance(exc, RedmineError):
+            self._show_error(str(exc))
+        else:
+            self._show_error(f"Неожиданная ошибка: {exc}")
+
+    def _load_from_cache(self, reason: str) -> None:
+        issues, activities, last_sync = self.database.load_cached()
+        if not issues:
+            self.status_label.setText("Нет связи с Redmine")
+            self._show_error(f"{reason}\n\nКеш пуст, показать нечего.")
+            return
+        if activities:
+            self.activities = activities
+        self._apply_issues(issues)
+        self.metrics.set_unavailable()
+        when = last_sync.strftime("%d.%m.%Y %H:%M") if last_sync else "неизвестно"
+        self._show_offline_banner(
+            f"Нет связи с Redmine. Показан кеш от {when}. Публикация недоступна."
+        )
+        self.status_label.setText("Офлайн-режим")
+
+    def _apply_issues(self, api_issues: list[Issue]) -> None:
+        merged = self._merge_pending_issues(list(api_issues))
+        self.issues = {issue.id: issue for issue in self._sort_issues(merged)}
+        self._rebuild_issue_list()
 
     def _merge_pending_issues(self, issues: list[Issue]) -> list[Issue]:
         """Keep issues that disappeared from the open list but still have drafts."""
@@ -430,6 +544,7 @@ class MainWindow(QMainWindow):
             widget.set_tracks(self.database.list_for_issue(issue_id))
 
         self.issues_layout.addStretch()
+        self._update_draft_metric()
 
     def _sort_and_rebuild(self) -> None:
         sorted_issues = self._sort_issues(list(self.issues.values()))
@@ -439,37 +554,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Metrics
     # ------------------------------------------------------------------
-    def _update_metrics(self) -> None:
-        if self.client is None or self.current_user_id is None:
-            return
-        today = date.today()
-        week_start = today - timedelta(days=today.weekday())
-        month_start = today.replace(day=1)
-        try:
-            entries = self.client.get_time_entries(
-                self.current_user_id,
-                spent_on_from=month_start,
-                spent_on_to=today,
-            )
-        except RedmineError as exc:
-            logger.warning("Metrics failed: %s", exc)
-            self.status_label.setText(f"Ошибка метрик: {exc}")
-            return
+    def _update_metrics(self, entries: list[TimeEntry]) -> None:
+        values = compute_metrics(entries, date.today())
+        self.metrics.update_metric(self.metrics.today, values.spent_today, values.planned_today)
+        self.metrics.update_metric(self.metrics.week, values.spent_week, values.planned_week)
+        self.metrics.update_metric(self.metrics.month, values.spent_month, values.planned_month)
 
-        planned_today = DAILY_WORK_HOURS
-        planned_week = max(1, workdays_in_range(week_start, today)) * DAILY_WORK_HOURS
-        planned_month = max(1, workdays_in_range(month_start, today)) * DAILY_WORK_HOURS
-
-        def spent_between(start: date, end: date) -> float:
-            return sum(entry.hours for entry in entries if start <= entry.spent_on <= end)
-
-        self.metrics.update_metric(self.metrics.today, spent_between(today, today), planned_today)
-        self.metrics.update_metric(
-            self.metrics.week, spent_between(week_start, today), planned_week
-        )
-        self.metrics.update_metric(
-            self.metrics.month, spent_between(month_start, today), planned_month
-        )
+    def _update_draft_metric(self) -> None:
+        pending = self.database.list_pending()
+        seconds = sum(track.current_elapsed_seconds() for track in pending)
+        self.metrics.set_drafts(round_up_minutes(seconds), len(pending))
 
     # ------------------------------------------------------------------
     # Track actions
@@ -592,6 +686,12 @@ class MainWindow(QMainWindow):
         self._rebuild_issue_list()
 
     def _publish_track(self, track_id: int) -> None:
+        if self._publishing:
+            return
+        if self.client is None:
+            self._show_error("Нет подключения к Redmine. Обновите задачи.")
+            return
+
         track = self.database.get(track_id)
         if track is None:
             return
@@ -608,85 +708,125 @@ class MainWindow(QMainWindow):
             allow_update=track.source_time_entry_id is not None,
             parent=self,
         )
-        accepted = dialog.exec() == QDialog.DialogCode.Accepted
-        if not accepted:
-            if was_running:
-                self.service.start(track_id)
-            self._sort_and_rebuild()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._resume_after_cancel(track_id, was_running)
             return
-        mode = dialog.mode()
 
         rounded_hours = track.rounded_hours
         if rounded_hours <= 0:
             self._show_error("Нельзя опубликовать трек с нулевым временем.")
+            self._resume_after_cancel(track_id, was_running)
             return
 
-        if self.client is None and not self._init_client():
-            return
-        client = self.client
-        if client is None:
-            return
+        plan = PublishPlan(
+            track_id=track_id,
+            mode=dialog.mode(),
+            rounded_hours=rounded_hours,
+            display=track.display_rounded,
+            was_running=was_running,
+            entry_id=track.source_time_entry_id,
+        )
 
-        try:
-            entry_id: int | None
-            if mode == PublishTrackDialog.UPDATE and track.source_time_entry_id:
-                entry_id = self._confirm_overwrite(track)
-                if entry_id is None:
-                    return
-                client.update_time_entry(
-                    time_entry_id=entry_id,
-                    hours=rounded_hours,
-                    comments=track.description,
-                    spent_on=track.date,
-                    activity_id=track.activity_id,
-                )
-            else:
-                response = client.create_time_entry(
-                    issue_id=track.issue_id,
-                    hours=rounded_hours,
-                    comments=track.description,
-                    spent_on=track.date,
-                    activity_id=track.activity_id,
-                )
-                entry_id = int((response.get("time_entry") or {}).get("id") or 0) or None
-        except RedmineError as exc:
-            logger.warning("Publish failed for track %s: %s", track_id, exc)
-            self._show_error(str(exc))
-            return
+        if plan.mode == PublishTrackDialog.UPDATE and plan.entry_id is not None:
+            client = self.client
+            entry_id = plan.entry_id
+            self._publishing = True
+            self.status_label.setText("Проверка записи...")
+            self._run(
+                lambda: client.get_time_entry(entry_id),
+                lambda remote: self._on_remote_checked(plan, remote),
+                self._on_publish_failed,
+            )
+        else:
+            self._execute_publish(plan, None)
 
-        self.database.mark_published(track_id, entry_id)
-        logger.info("Published track %s as entry %s (%s h)", track_id, entry_id, rounded_hours)
-        self._show_info(f"Трек опубликован: {track.display_rounded} ч")
-        self.refresh_issues()
-
-    def _confirm_overwrite(self, track: LocalTrack) -> int | None:
-        """Check the remote entry before overwriting it."""
-        entry_id = track.source_time_entry_id
-        if entry_id is None or self.client is None:
-            return None
-
-        try:
-            remote = self.client.get_time_entry(entry_id)
-        except RedmineError as exc:
-            self._show_error(f"Не удалось проверить запись #{entry_id}: {exc}")
-            return None
-
-        if (
+    def _on_remote_checked(self, plan: PublishPlan, remote: Any) -> None:
+        track = self.database.get(plan.track_id)
+        conflict = (
             remote is not None
+            and track is not None
             and track.source_updated_on is not None
             and remote.updated_on != track.source_updated_on
-        ):
+        )
+        if conflict:
             dialog = ConfirmationDialog(
                 "Запись изменилась",
-                f"Запись #{entry_id} изменили в Redmine после того, как вы начали "
+                f"Запись #{plan.entry_id} изменили в Redmine после того, как вы начали "
                 "её продолжение.<br><br>"
                 "Обновление перезапишет текущие значения часов, описания и вида "
                 "деятельности.<br><br>Продолжить?",
                 parent=self,
             )
             if dialog.exec() != QDialog.DialogCode.Accepted:
-                return None
-        return entry_id
+                self._publishing = False
+                self._resume_after_cancel(plan.track_id, plan.was_running)
+                return
+        self._execute_publish(plan, plan.entry_id)
+
+    def _execute_publish(self, plan: PublishPlan, entry_id: int | None) -> None:
+        client = self.client
+        track = self.database.get(plan.track_id)
+        if client is None or track is None:
+            self._publishing = False
+            return
+
+        self._publishing = True
+        self.status_label.setText("Публикация...")
+
+        def job() -> int | None:
+            if plan.mode == PublishTrackDialog.UPDATE and entry_id is not None:
+                client.update_time_entry(
+                    time_entry_id=entry_id,
+                    hours=plan.rounded_hours,
+                    comments=track.description,
+                    spent_on=track.date,
+                    activity_id=track.activity_id,
+                )
+                return entry_id
+            response = client.create_time_entry(
+                issue_id=track.issue_id,
+                hours=plan.rounded_hours,
+                comments=track.description,
+                spent_on=track.date,
+                activity_id=track.activity_id,
+            )
+            payload = response.get("time_entry") or {}
+            return int(payload.get("id") or 0) or None
+
+        self._run(
+            job,
+            lambda new_id: self._on_published(plan, new_id),
+            self._on_publish_failed,
+        )
+
+    def _on_published(self, plan: PublishPlan, entry_id: int | None) -> None:
+        self._publishing = False
+        self.database.mark_published(plan.track_id, entry_id)
+        logger.info(
+            "Published track %s as entry %s (%s h)",
+            plan.track_id,
+            entry_id,
+            plan.rounded_hours,
+        )
+        self.status_label.setText("Опубликовано")
+        self._show_info(f"Трек опубликован: {plan.display} ч")
+        self._sort_and_rebuild()
+        self.refresh_issues()
+
+    def _on_publish_failed(self, exc: BaseException) -> None:
+        self._publishing = False
+        logger.warning("Publish failed: %s", exc)
+        self.status_label.setText("Ошибка публикации")
+        if isinstance(exc, RedmineConnectionError):
+            self._show_offline_banner(
+                "Нет связи с Redmine. Публикация не выполнена, черновик сохранён."
+            )
+        self._show_error(str(exc))
+
+    def _resume_after_cancel(self, track_id: int, was_running: bool) -> None:
+        if was_running:
+            self.service.start(track_id)
+        self._sort_and_rebuild()
 
     def _cancel_track(self, track_id: int) -> None:
         track = self.database.get(track_id)

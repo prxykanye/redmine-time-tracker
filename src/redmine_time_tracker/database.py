@@ -11,12 +11,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
-from .models import LocalTrack, TrackStatus
+from .models import Activity, Issue, LocalTrack, TimeEntry, TrackStatus
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS local_tracks (
@@ -69,6 +69,48 @@ _EXTRA_COLUMNS = {
     "started_at": "TEXT",
 }
 
+_CACHE_SQL = (
+    """
+    CREATE TABLE IF NOT EXISTS cached_issues (
+        id INTEGER PRIMARY KEY,
+        subject TEXT NOT NULL,
+        estimated_hours REAL,
+        total_spent_hours REAL NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS cached_activities (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        is_default INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS cached_time_entries (
+        id INTEGER PRIMARY KEY,
+        issue_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL DEFAULT 0,
+        hours REAL NOT NULL,
+        comments TEXT NOT NULL DEFAULT '',
+        spent_on TEXT NOT NULL,
+        activity_id INTEGER NOT NULL DEFAULT 0,
+        activity_name TEXT NOT NULL DEFAULT '',
+        created_on TEXT NOT NULL,
+        updated_on TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_cached_time_entries_issue
+    ON cached_time_entries(issue_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """,
+)
+
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
@@ -114,6 +156,8 @@ class Database:
             if column not in existing:
                 connection.execute(f"ALTER TABLE local_tracks ADD COLUMN {column} {column_type}")
         for statement in _INDEXES_SQL:
+            connection.execute(statement)
+        for statement in _CACHE_SQL:
             connection.execute(statement)
 
     # ------------------------------------------------------------------
@@ -355,11 +399,124 @@ class Database:
         with self.connect() as connection, connection:
             connection.execute("DELETE FROM local_tracks WHERE id = ?", (track_id,))
 
-    def orphan_candidates(self, threshold: timedelta) -> list[LocalTrack]:
-        """Running tracks whose heartbeat is older than the threshold."""
-        cutoff = datetime.now() - threshold
-        return [
-            track
-            for track in self.list_running()
-            if (track.last_heartbeat_at or track.started_at or cutoff) < cutoff
+    # ------------------------------------------------------------------
+    # Offline cache
+    # ------------------------------------------------------------------
+    def replace_cache(
+        self,
+        issues: list[Issue],
+        activities: list[Activity],
+        fetched_at: datetime,
+    ) -> None:
+        """Replace the cached issue list with a fresh snapshot."""
+        issue_rows = [
+            (issue.id, issue.subject, issue.estimated_hours, issue.total_spent_hours)
+            for issue in issues
         ]
+        activity_rows = [
+            (activity.id, activity.name, int(activity.is_default)) for activity in activities
+        ]
+        entry_rows = [
+            (
+                entry.id,
+                entry.issue_id,
+                entry.user_id,
+                entry.hours,
+                entry.comments,
+                entry.spent_on.isoformat(),
+                entry.activity_id,
+                entry.activity_name,
+                entry.created_on.isoformat(),
+                entry.updated_on.isoformat(),
+            )
+            for issue in issues
+            for entry in issue.time_entries
+        ]
+        with self.connect() as connection, connection:
+            connection.execute("DELETE FROM cached_issues")
+            connection.execute("DELETE FROM cached_activities")
+            connection.execute("DELETE FROM cached_time_entries")
+            if issue_rows:
+                connection.executemany(
+                    "INSERT INTO cached_issues "
+                    "(id, subject, estimated_hours, total_spent_hours) VALUES (?, ?, ?, ?)",
+                    issue_rows,
+                )
+            if activity_rows:
+                connection.executemany(
+                    "INSERT INTO cached_activities (id, name, is_default) VALUES (?, ?, ?)",
+                    activity_rows,
+                )
+            if entry_rows:
+                connection.executemany(
+                    "INSERT INTO cached_time_entries "
+                    "(id, issue_id, user_id, hours, comments, spent_on, activity_id, "
+                    "activity_name, created_on, updated_on) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    entry_rows,
+                )
+            connection.execute(
+                "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+                ("last_sync", fetched_at.isoformat()),
+            )
+
+    def load_cached(
+        self,
+    ) -> tuple[list[Issue], list[Activity], datetime | None]:
+        """Return the last snapshot, or empty structures when nothing is cached."""
+        with self.connect() as connection:
+            issue_rows = connection.execute("SELECT * FROM cached_issues ORDER BY id").fetchall()
+            activity_rows = connection.execute(
+                "SELECT * FROM cached_activities ORDER BY id"
+            ).fetchall()
+            entry_rows = connection.execute(
+                "SELECT * FROM cached_time_entries ORDER BY updated_on DESC"
+            ).fetchall()
+            state_row = connection.execute(
+                "SELECT value FROM app_state WHERE key = ?", ("last_sync",)
+            ).fetchone()
+
+        entries_by_issue: dict[int, list[TimeEntry]] = {}
+        for row in entry_rows:
+            entries_by_issue.setdefault(row["issue_id"], []).append(
+                TimeEntry(
+                    id=row["id"],
+                    issue_id=row["issue_id"],
+                    user_id=row["user_id"],
+                    hours=row["hours"],
+                    comments=row["comments"],
+                    spent_on=date.fromisoformat(row["spent_on"]),
+                    activity_id=row["activity_id"],
+                    activity_name=row["activity_name"],
+                    created_on=datetime.fromisoformat(row["created_on"]),
+                    updated_on=datetime.fromisoformat(row["updated_on"]),
+                )
+            )
+
+        issues = [
+            Issue(
+                id=row["id"],
+                subject=row["subject"],
+                estimated_hours=row["estimated_hours"],
+                total_spent_hours=row["total_spent_hours"],
+                time_entries=entries_by_issue.get(row["id"], [])[:5],
+            )
+            for row in issue_rows
+        ]
+        activities = [
+            Activity(
+                id=row["id"],
+                name=row["name"],
+                is_default=bool(row["is_default"]),
+            )
+            for row in activity_rows
+        ]
+        last_sync = datetime.fromisoformat(state_row["value"]) if state_row else None
+        return issues, activities, last_sync
+
+    def clear_cache(self) -> None:
+        with self.connect() as connection, connection:
+            connection.execute("DELETE FROM cached_issues")
+            connection.execute("DELETE FROM cached_activities")
+            connection.execute("DELETE FROM cached_time_entries")
+            connection.execute("DELETE FROM app_state WHERE key = ?", ("last_sync",))

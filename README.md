@@ -11,6 +11,11 @@ draft never touches the network. Only publishing does.
 
 - Loads open issues assigned to the current Redmine user, with estimate, spent
   time and progress percentage.
+- One paginated request for the recent entries of all issues instead of one
+  request per issue.
+- Network calls run in a background thread, so the window stays responsive.
+- Offline cache: the last issue list is stored in SQLite and shown with a
+  banner when Redmine is unreachable.
 - Several local drafts per issue, with activity, description and spent-on date.
 - Start, pause, resume, edit, publish and cancel a draft.
 - Starting a draft automatically pauses the previously running one.
@@ -22,7 +27,8 @@ draft never touches the network. Only publishing does.
   since the draft was created triggers a confirmation.
 - Local publication history: published drafts are kept in SQLite with the
   Redmine entry id instead of being deleted.
-- Today / week / month metrics against a plan prorated by working days.
+- Today / week / month metrics against a plan prorated by working days, plus a
+  separate line for unpublished drafts.
 - Crash recovery: a running draft writes a heartbeat, and the next launch asks
   whether to keep the time up to the last heartbeat or include the downtime.
 - Issues that disappeared from the open list but still have drafts stay visible.
@@ -109,12 +115,10 @@ the configured Redmine instance.
 
 ## Limitations
 
-- Issues are not cached yet, so the issue list requires a working connection.
-  Local drafts survive an outage and stay available through the recovery and
-  history paths, but the full offline mode is not implemented.
-- HTTP requests run in the GUI thread, so a slow server freezes the window
-  during refresh.
+- Publishing requires a working connection. Drafts are never lost: on failure
+  they stay in the local database and can be published later.
 - The interface is Russian-only.
+- Metrics are hidden while offline; they are not cached separately.
 
 ## Development
 
@@ -127,8 +131,9 @@ uv run pytest
 ```
 
 The test suite covers rounding, storage migrations, the partial unique index on
-continuations, heartbeat and recovery logic, configuration and the API client
-pagination. It runs without a Redmine server and without a display.
+continuations, heartbeat and recovery logic, configuration, metric proration,
+the offline cache and the API client pagination. It runs without a Redmine
+server and without a display.
 
 Layout:
 
@@ -136,12 +141,14 @@ Layout:
 src/redmine_time_tracker/
 ├── __main__.py          application entry point and single-instance lock
 ├── config.py            config.ini + .env
-├── database.py          SQLite repository and schema migrations
+├── database.py          SQLite repository, schema migrations and offline cache
+├── metrics.py           plan proration and period calculations
 ├── models.py            dataclasses and rounding rules
 ├── paths.py             platform directories
 ├── redmine_client.py    REST client and error mapping
+├── sync.py              dashboard loading for the worker thread
 ├── tracking.py          track lifecycle, heartbeat, crash recovery
-└── gui/                 Qt widgets, dialogs and the main window
+└── gui/                 Qt widgets, dialogs, workers and the main window
 ```
 
 ## License

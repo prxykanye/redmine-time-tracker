@@ -52,9 +52,13 @@ class MetricsWidget(QWidget):
         self.week = self._create_card("Неделя")
         self.month = self._create_card("Месяц")
 
+        self.drafts_label = QLabel("")
+        self.drafts_label.setStyleSheet(f"color: {YELLOW};")
+
         layout.addWidget(self.today)
         layout.addWidget(self.week)
         layout.addWidget(self.month)
+        layout.addWidget(self.drafts_label)
         layout.addStretch()
 
     def _create_card(self, title: str) -> QFrame:
@@ -83,6 +87,20 @@ class MetricsWidget(QWidget):
         frame.value_label.setText(  # type: ignore[attr-defined]
             f"<span style='color:{color};'>{spent:.1f}h / {planned:.1f}h ({percent:.0f}%)</span>"
         )
+
+    def set_drafts(self, total_minutes: int, count: int) -> None:
+        if count == 0:
+            self.drafts_label.setText("")
+            return
+        noun = "трек" if count == 1 else "трека" if count < 5 else "треков"
+        self.drafts_label.setText(
+            f"Черновики: {format_hm(total_minutes)} · {count} {noun}, не опубликовано"
+        )
+
+    def set_unavailable(self) -> None:
+        for frame in (self.today, self.week, self.month):
+            frame.value_label.setText("—")  # type: ignore[attr-defined]
+            frame.value_label.setToolTip("Нет связи с Redmine")  # type: ignore[attr-defined]
 
 
 class TrackWidget(QWidget):
@@ -269,22 +287,36 @@ class IssueWidget(QFrame):
             self.existing_layout.addWidget(widget)
 
     def set_tracks(self, tracks: list[LocalTrack]) -> None:
-        self._clear(self.tracks_layout)
         pending_seconds = sum(track.current_elapsed_seconds() for track in tracks)
         self.local_label.setText(
             f"Локально: {format_hm(round_up_minutes(pending_seconds))}" if pending_seconds else ""
         )
+
+        existing = {widget.track_id: widget for widget in self.track_widgets()}
+        wanted = {track.id for track in tracks if track.id is not None}
+        for track_id, stale in existing.items():
+            if track_id not in wanted:
+                stale.setParent(None)
+                stale.deleteLater()
+
+        while self.tracks_layout.count():
+            self.tracks_layout.takeAt(0)
+
         for track in tracks:
-            widget = TrackWidget(track)
-            widget.start_requested.connect(
-                lambda track_id, issue_id=self.issue_id: self.continue_track_requested.emit(
-                    issue_id, track_id
+            widget = existing.get(track.id) if track.id is not None else None
+            if widget is None:
+                widget = TrackWidget(track)
+                widget.start_requested.connect(
+                    lambda track_id, issue_id=self.issue_id: self.continue_track_requested.emit(
+                        issue_id, track_id
+                    )
                 )
-            )
-            widget.pause_requested.connect(self.pause_track_requested.emit)
-            widget.edit_requested.connect(self.edit_track_requested.emit)
-            widget.publish_requested.connect(self.publish_track_requested.emit)
-            widget.cancel_requested.connect(self.cancel_track_requested.emit)
+                widget.pause_requested.connect(self.pause_track_requested.emit)
+                widget.edit_requested.connect(self.edit_track_requested.emit)
+                widget.publish_requested.connect(self.publish_track_requested.emit)
+                widget.cancel_requested.connect(self.cancel_track_requested.emit)
+            else:
+                widget.refresh(track)
             self.tracks_layout.addWidget(widget)
 
     @staticmethod

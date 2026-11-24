@@ -135,16 +135,6 @@ def test_pending_issue_subjects(db: Database, make_track: TrackFactory) -> None:
     assert db.pending_issue_subjects() == {10: "First", 20: "Second"}
 
 
-def test_orphan_candidates(db: Database, make_track: TrackFactory) -> None:
-    track = db.save(make_track())
-    assert track.id is not None
-    old = datetime.now() - timedelta(minutes=10)
-    db.start(track.id, old)
-
-    candidates = db.orphan_candidates(timedelta(seconds=90))
-    assert [item.id for item in candidates] == [track.id]
-
-
 def test_migration_from_legacy_schema(tmp_path) -> None:
     path = tmp_path / "legacy.db"
     connection = sqlite3.connect(path)
@@ -188,4 +178,4 @@ def test_migration_from_legacy_schema(tmp_path) -> None:
 
     with database.connect() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 1
+    assert version == 2

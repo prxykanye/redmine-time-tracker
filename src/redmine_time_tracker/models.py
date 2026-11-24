@@ -102,10 +102,6 @@ class LocalTrack:
             return int(self.elapsed_seconds + max(0.0, extra))
         return max(0, self.elapsed_seconds)
 
-    @property
-    def elapsed_hours(self) -> float:
-        return self.current_elapsed_seconds() / 3600.0
-
     @staticmethod
     def rounded_hours_from_seconds(elapsed_seconds: int) -> float:
         return round_up_minutes(elapsed_seconds) / 60.0

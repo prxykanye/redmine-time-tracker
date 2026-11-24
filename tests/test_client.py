@@ -161,3 +161,72 @@ def test_entry_mapping() -> None:
     assert entry.hours == 1.5
     assert entry.activity_name == "Development"
     assert entry.spent_on == date(2026, 1, 5)
+
+
+def entry_payload(entry_id: int, issue_id: int) -> dict[str, Any]:
+    return {
+        "id": entry_id,
+        "issue": {"id": issue_id},
+        "user": {"id": 1},
+        "hours": 1.0,
+        "comments": "",
+        "spent_on": "2026-01-05",
+        "activity": {"id": 9, "name": "Development"},
+        "created_on": "2026-01-05T10:00:00",
+        "updated_on": "2026-01-05T10:00:00",
+    }
+
+
+def test_entries_for_many_issues_uses_one_filtered_request() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                payload={
+                    "time_entries": [
+                        entry_payload(20, 2),
+                        entry_payload(10, 1),
+                        entry_payload(11, 1),
+                    ],
+                    "total_count": 3,
+                }
+            )
+        ]
+    )
+    client = make_client(session)
+
+    result = client.get_time_entries_for_issues([1, 2], limit_per_issue=1)
+
+    assert len(session.calls) == 1
+    assert session.calls[0]["params"]["issue_id"] == "1,2"
+    assert [entry.id for entry in result[1]] == [10]
+    assert [entry.id for entry in result[2]] == [20]
+
+
+def test_entries_for_issues_stops_when_every_issue_is_satisfied() -> None:
+    first_page = [entry_payload(entry_id, 1) for entry_id in range(100)]
+    session = FakeSession([FakeResponse(payload={"time_entries": first_page, "total_count": 500})])
+    client = make_client(session)
+
+    result = client.get_time_entries_for_issues([1], limit_per_issue=1)
+
+    assert len(session.calls) == 1
+    assert [entry.id for entry in result[1]] == [0]
+
+
+def test_entries_for_issues_chunks_long_issue_lists() -> None:
+    issue_ids = list(range(1, 61))
+    session = FakeSession(
+        [
+            FakeResponse(payload={"time_entries": [], "total_count": 0}),
+            FakeResponse(payload={"time_entries": [], "total_count": 0}),
+        ]
+    )
+    client = make_client(session)
+
+    client.get_time_entries_for_issues(issue_ids)
+
+    assert len(session.calls) == 2
+    first = session.calls[0]["params"]["issue_id"].split(",")
+    second = session.calls[1]["params"]["issue_id"].split(",")
+    assert len(first) == 50
+    assert len(second) == 10

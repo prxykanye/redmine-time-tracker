@@ -183,6 +183,60 @@ class RedmineClient:
             for item in data.get("time_entries", [])
         ]
 
+    def get_time_entries_for_issues(
+        self,
+        issue_ids: list[int],
+        limit_per_issue: int = 5,
+        chunk_size: int = 50,
+    ) -> dict[int, list[TimeEntry]]:
+        """Fetch the latest entries for many issues with as few requests as possible.
+
+        Redmine accepts a comma-separated ``issue_id`` filter. Pages are walked
+        until every requested issue has enough entries or the result set ends.
+        """
+        unique_ids = list(dict.fromkeys(issue_ids))
+        result: dict[int, list[TimeEntry]] = {}
+        for start in range(0, len(unique_ids), chunk_size):
+            chunk = unique_ids[start : start + chunk_size]
+            if chunk:
+                self._collect_entries(chunk, limit_per_issue, result)
+        return result
+
+    def _collect_entries(
+        self,
+        issue_ids: list[int],
+        limit_per_issue: int,
+        result: dict[int, list[TimeEntry]],
+    ) -> None:
+        page_size = 100
+        offset = 0
+        while True:
+            data = self._request(
+                "GET",
+                "/time_entries.json",
+                params={
+                    "issue_id": ",".join(str(issue_id) for issue_id in issue_ids),
+                    "sort": "updated_on:desc",
+                    "offset": offset,
+                    "limit": page_size,
+                },
+            )
+            items = data.get("time_entries") or []
+            for item in items:
+                entry = self._entry_from_json(item)
+                bucket = result.setdefault(entry.issue_id, [])
+                if len(bucket) < limit_per_issue:
+                    bucket.append(entry)
+
+            offset += len(items)
+            if len(items) < page_size:
+                break
+            total = data.get("total_count")
+            if isinstance(total, int) and offset >= total:
+                break
+            if all(len(result.get(issue_id, [])) >= limit_per_issue for issue_id in issue_ids):
+                break
+
     def get_time_entries(
         self,
         user_id: int | str,
