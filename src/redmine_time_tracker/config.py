@@ -13,6 +13,7 @@ import stat
 from collections.abc import Mapping
 from configparser import ConfigParser
 from pathlib import Path
+from typing import Any
 
 from dotenv import dotenv_values
 
@@ -21,6 +22,16 @@ from . import paths
 CONFIG_FILENAME = "config.ini"
 ENV_FILENAME = ".env"
 API_KEY_VAR = "REDMINE_API_KEY"
+KEYRING_SERVICE = "redmine-time-tracker"
+KEYRING_USERNAME = "api-key"
+
+
+def _import_keyring() -> Any | None:
+    try:
+        import keyring
+    except Exception:
+        return None
+    return keyring
 
 
 class ConfigError(ValueError):
@@ -44,11 +55,13 @@ class AppConfig:
         self,
         config_dir: Path | None = None,
         environ: Mapping[str, str] | None = None,
+        keyring_module: Any | None = None,
     ) -> None:
         self.dir = Path(config_dir) if config_dir else paths.config_dir()
         self.path = self.dir / CONFIG_FILENAME
         self.env_path = self.dir / ENV_FILENAME
         self._environ = environ if environ is not None else os.environ
+        self._keyring = keyring_module if keyring_module is not None else _import_keyring()
         self._parser = ConfigParser()
         if self.path.exists():
             self._parser.read(self.path, encoding="utf-8")
@@ -70,11 +83,41 @@ class AppConfig:
     @property
     def redmine_api_key(self) -> str:
         from_environ = (self._environ.get(API_KEY_VAR) or "").strip()
-        return from_environ or (self._file_env.get(API_KEY_VAR) or "").strip()
+        if from_environ:
+            return from_environ
+        from_keyring = self._read_keyring()
+        if from_keyring:
+            return from_keyring
+        return (self._file_env.get(API_KEY_VAR) or "").strip()
 
     def set_redmine_api_key(self, value: str) -> None:
-        """Persist the API key to ``.env`` with owner-only permissions."""
+        """Store the key in the OS keyring when available, otherwise in ``.env``."""
         key = value.strip()
+        if key and self._write_keyring(key):
+            self._remove_env_key()
+            self._file_env.pop(API_KEY_VAR, None)
+            return
+        self._write_env_key(key)
+
+    def _read_keyring(self) -> str:
+        if self._keyring is None:
+            return ""
+        try:
+            value = self._keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        except Exception:
+            return ""
+        return (value or "").strip()
+
+    def _write_keyring(self, key: str) -> bool:
+        if self._keyring is None:
+            return False
+        try:
+            self._keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key)
+        except Exception:
+            return False
+        return True
+
+    def _write_env_key(self, key: str) -> None:
         lines: list[str] = []
         if self.env_path.exists():
             lines = self.env_path.read_text(encoding="utf-8").splitlines()
@@ -94,6 +137,19 @@ class AppConfig:
             self.env_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
         self._file_env[API_KEY_VAR] = key
+
+    def _remove_env_key(self) -> None:
+        if not self.env_path.exists():
+            return
+        lines = [
+            line
+            for line in self.env_path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith(f"{API_KEY_VAR}=")
+        ]
+        content = "\n".join(lines) + ("\n" if lines else "")
+        self.env_path.write_text(content, encoding="utf-8")
+        if os.name == "posix":
+            self.env_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
     @property
     def is_configured(self) -> bool:

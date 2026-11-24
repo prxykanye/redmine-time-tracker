@@ -11,10 +11,13 @@ Do not open a public issue for a vulnerability.
 
 ## Credentials
 
-The Redmine API key is read from the `REDMINE_API_KEY` environment variable or
-from `$CONFIG_DIR/.env`. The file is created with mode `0600`, the key is never
-written to logs and never included in error messages. The local SQLite database
-contains issue ids, subjects, descriptions and tracked time, but no credentials.
+The Redmine API key is read from the `REDMINE_API_KEY` environment variable
+first, from the OS keychain when the optional `keyring` dependency is installed,
+and from `$CONFIG_DIR/.env` last. The `.env` file is created with mode `0600`
+and its plaintext entry is removed when the key is moved to a keyring backend.
+The key is never written to logs and never included in error messages. The local
+SQLite database contains issue ids, subjects, descriptions and tracked time, but
+no credentials.
 
 Keep `.env`, `config.ini`, `data.db` and the log files out of version control;
 they are listed in `.gitignore` for that reason.

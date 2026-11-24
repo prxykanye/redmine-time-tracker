@@ -75,6 +75,12 @@ pipx install git+https://github.com/prxykanye/redmine-time-tracker.git
 redmine-time-tracker
 ```
 
+Install with the optional OS keychain support:
+
+```bash
+pipx install "redmine-time-tracker[keyring] @ git+https://github.com/prxykanye/redmine-time-tracker.git"
+```
+
 Build a wheel and install it:
 
 ```bash
@@ -96,9 +102,11 @@ Both are stored in the user configuration directory:
 | macOS | `~/Library/Application Support/redmine-time-tracker/` | same | `~/Library/Logs/redmine-time-tracker/` |
 | Windows | `%APPDATA%\redmine-time-tracker\` | `%LOCALAPPDATA%\redmine-time-tracker\` | `%LOCALAPPDATA%\redmine-time-tracker\Logs\` |
 
-`config.ini` holds the URL. `.env` holds the key in the form
-`REDMINE_API_KEY=...` and is created with mode `0600`. The `REDMINE_API_KEY`
-environment variable takes priority over the file.
+`config.ini` holds the URL. The API key is read from the `REDMINE_API_KEY`
+environment variable first, then from the OS keychain if the `keyring` extra is
+installed, then from `.env` in the form `REDMINE_API_KEY=...`. The `.env` file
+is created with mode `0600`. When a keyring backend is available, saving the key
+removes the plaintext copy from `.env`.
 
 Tests and portable installs can override the locations with `RTT_CONFIG_DIR`,
 `RTT_DATA_DIR` and `RTT_LOG_DIR`.

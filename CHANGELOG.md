@@ -36,6 +36,8 @@ All notable changes to this project are documented here. The format follows
 - Background worker for connection, refresh and publishing.
 - One paginated request for the recent entries of all issues.
 - Unpublished draft total next to the period metrics.
+- Optional OS keychain storage for the API key via the `keyring` extra; moving
+  the key there removes the plaintext `.env` entry.
 - Search by issue number or subject, progress bars and keyboard shortcuts.
 - Publication history tab with a month filter and links to Redmine entries.
 - Compact always-on-top window with the running timer and controls.
