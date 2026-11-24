@@ -7,6 +7,8 @@ Redmine REST API.
 The tracker is deliberately offline-first: starting, pausing and editing a
 draft never touches the network. Only publishing does.
 
+![Application window](docs/screenshot.png)
+
 ## Features
 
 - Loads open issues assigned to the current Redmine user, with estimate, spent
@@ -153,6 +155,12 @@ The test suite covers rounding, storage migrations, the partial unique index on
 continuations, heartbeat and recovery logic, configuration, metric proration,
 the offline cache and the API client pagination. It runs without a Redmine
 server and without a display.
+
+The README screenshot is rendered from demo data, no Redmine instance needed:
+
+```bash
+uv run python docs/render_screenshot.py
+```
 
 Layout:
 
