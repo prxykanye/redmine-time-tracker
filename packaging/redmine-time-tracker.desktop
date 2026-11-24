@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Redmine Time Tracker
+GenericName=Time Tracker
+Comment=Track time on Redmine issues with local drafts and rounded publishing
+Exec=redmine-time-tracker
+Icon=redmine-time-tracker
+Terminal=false
+Categories=Utility;Office;
+Keywords=redmine;time;tracker;timer;timesheet;
+StartupNotify=true
+StartupWMClass=redmine-time-tracker

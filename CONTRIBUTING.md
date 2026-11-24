@@ -27,6 +27,9 @@ All four commands must pass. The CI runs the same set on Python 3.13 and 3.14.
 - Every change to rounding, storage or recovery needs a test. Those rules
   decide how much time ends up in someone's timesheet.
 - Do not hard-code a Redmine URL, a company name or a personal path.
+- Bump the version in three places before tagging: `src/redmine_time_tracker/__init__.py`,
+  `pyproject.toml` and `packaging/arch/PKGBUILD`. The test suite checks that
+  they match.
 - Write commit messages in the imperative mood: `Add heartbeat recovery`,
   not `Added` or `Adds`.
 - Localise user-facing strings in Russian to match the existing interface.

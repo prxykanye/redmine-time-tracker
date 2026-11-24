@@ -1,0 +1,22 @@
+pkgbase = redmine-time-tracker
+	pkgdesc = Desktop time tracker for Redmine with local drafts, offline cache and rounded publishing
+	pkgver = 0.2.0
+	pkgrel = 1
+	url = https://github.com/prxykanye/redmine-time-tracker
+	arch = any
+	license = MIT
+	checkdepends = python-pytest
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-wheel
+	makedepends = python-hatchling
+	depends = python
+	depends = pyside6
+	depends = python-requests
+	depends = python-platformdirs
+	depends = python-dotenv
+	optdepends = python-keyring: keep the Redmine API key in the OS keychain
+	source = redmine-time-tracker-0.2.0.tar.gz::https://github.com/prxykanye/redmine-time-tracker/archive/refs/tags/v0.2.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = redmine-time-tracker

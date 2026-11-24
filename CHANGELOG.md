@@ -41,6 +41,11 @@ All notable changes to this project are documented here. The format follows
 - Search by issue number or subject, progress bars and keyboard shortcuts.
 - Publication history tab with a month filter and links to Redmine entries.
 - Compact always-on-top window with the running timer and controls.
+- Application icon for the window, tray, menu entry and package.
+- `--version` and `--minimized` command line flags.
+- Per-user Linux installer with optional autostart, plus an Arch PKGBUILD.
+- Release workflow builds the wheel, sdist, self-contained bundle and pacman
+  package.
 - Headless GUI test for tabs, search, track lifecycle and history.
 - Window geometry is remembered between launches.
 - Test suite, ruff, mypy, pre-commit and GitHub Actions.

@@ -91,6 +91,52 @@ pipx install dist/redmine_time_tracker-0.2.0-py3-none-any.whl
 Pushing a `v*` tag builds the sdist and wheel and attaches them to a GitHub
 release.
 
+## Linux application
+
+Two packaged options are published with each release.
+
+### Arch and CachyOS
+
+An Arch package builds from the tag and installs with pacman:
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+It brings `pyside6` and the Python dependencies from the repositories, adds the
+menu entry and icons, and is removed with `sudo pacman -R redmine-time-tracker`.
+
+### Any Linux, per-user bundle
+
+Download `redmine-time-tracker-<version>-linux-x86_64.tar.gz` from the latest
+release, unpack it and run the installer:
+
+```bash
+tar -xzf redmine-time-tracker-*-linux-x86_64.tar.gz
+cd redmine-time-tracker-*-linux-x86_64
+./install.sh --autostart
+```
+
+No root is required. The installer writes to:
+
+- `~/.local/opt/redmine-time-tracker` for the application;
+- `~/.local/bin/redmine-time-tracker` for the launcher;
+- `~/.local/share/applications` and `~/.local/share/icons` for the menu entry;
+- `~/.config/autostart` when `--autostart` is passed.
+
+Drop `--autostart` to skip autostart, or use `--no-autostart` to remove an
+existing entry. The bundle is built on Ubuntu 24.04 and needs glibc 2.39 or
+newer; on older distributions use the PKGBUILD or `pipx`.
+
+Remove the application and its menu integration, keeping your config and drafts:
+
+```bash
+./install.sh --uninstall
+```
+
+`redmine-time-tracker --minimized` starts the application hidden in the tray.
+
 ## First run
 
 On the first launch the application asks for the Redmine URL and the API key.
@@ -201,6 +247,13 @@ src/redmine_time_tracker/
 ├── sync.py              dashboard loading for the worker thread
 ├── tracking.py          track lifecycle, heartbeat, crash recovery
 └── gui/                 Qt widgets, dialogs, workers and the main window
+
+packaging/
+├── arch/PKGBUILD        pacman package for Arch and CachyOS
+├── build_linux.sh       PyInstaller bundle builder
+├── install.sh           per-user installer and uninstaller
+├── pyinstaller.spec     bundle layout
+└── render_icons.py      PNG icons from the SVG source
 ```
 
 ## License

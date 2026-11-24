@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Redmine Time Tracker
+Comment=Start the Redmine time tracker in the system tray
+Exec=redmine-time-tracker --minimized
+Icon=redmine-time-tracker
+Terminal=false
+X-GNOME-Autostart-enabled=true

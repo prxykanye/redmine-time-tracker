@@ -108,8 +108,8 @@ class MainWindow(QMainWindow):
         self.compact_window.pause_requested.connect(self._pause_track)
         self.compact_window.publish_requested.connect(self._publish_track)
         self.compact_window.restore_requested.connect(lambda: self._toggle_compact(False))
-        self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
-        if self._tray_available:
+        self.tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+        if self.tray_available:
             self._build_tray()
         self._build_menu()
         self._build_shortcuts()
@@ -202,9 +202,10 @@ class MainWindow(QMainWindow):
 
     def _build_tray(self) -> None:
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(
-            self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
-        )
+        icon = QApplication.windowIcon()
+        if icon.isNull():
+            icon = self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+        self.tray_icon.setIcon(icon)
         self.tray_icon.setToolTip("Redmine Time Tracker")
 
         tray_menu = QMenu(self)
@@ -452,7 +453,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.gui_settings.setValue("window/geometry", self.saveGeometry())
-        if not self._tray_available or self.tray_icon is None:
+        if not self.tray_available or self.tray_icon is None:
             self._quit()
             return
         event.ignore()

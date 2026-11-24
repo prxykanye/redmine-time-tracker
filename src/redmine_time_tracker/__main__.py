@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
+from importlib.resources import files
 
 from PySide6.QtCore import QLockFile
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import __version__, paths
@@ -17,16 +20,39 @@ from .logging_setup import configure_logging, install_excepthook
 logger = logging.getLogger(__name__)
 
 
+def app_icon() -> QIcon:
+    path = files("redmine_time_tracker").joinpath("resources", "icons", "appicon-256.png")
+    return QIcon(str(path))
+
+
+def parse_arguments(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    parser = argparse.ArgumentParser(
+        prog="redmine-time-tracker",
+        description="Desktop time tracker for Redmine.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--minimized",
+        action="store_true",
+        help="start hidden in the system tray",
+    )
+    return parser.parse_known_args(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    args, qt_args = parse_arguments(raw_args)
+
     log_file = configure_logging()
     install_excepthook()
 
-    app = QApplication(argv if argv is not None else sys.argv)
+    app = QApplication([sys.argv[0], *qt_args])
     app.setApplicationName("Redmine Time Tracker")
     app.setApplicationDisplayName("Redmine Time Tracker")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("redmine-time-tracker")
     app.setDesktopFileName("redmine-time-tracker")
+    app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
 
     lock = QLockFile(str(paths.lock_path()))
@@ -46,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     config = AppConfig()
     window = MainWindow(config, database)
     window.show()
+    if args.minimized and window.tray_available:
+        window.hide()
 
     logger.info("Started version %s, log file: %s", __version__, log_file)
     return app.exec()

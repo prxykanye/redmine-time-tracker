@@ -1,0 +1,53 @@
+# Maintainer: prxy <prxykanye@prxyya.ru>
+pkgname=redmine-time-tracker
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Desktop time tracker for Redmine with local drafts, offline cache and rounded publishing"
+arch=('any')
+url="https://github.com/prxykanye/redmine-time-tracker"
+license=('MIT')
+depends=(
+  'python'
+  'pyside6'
+  'python-requests'
+  'python-platformdirs'
+  'python-dotenv'
+)
+optdepends=('python-keyring: keep the Redmine API key in the OS keychain')
+makedepends=(
+  'python-build'
+  'python-installer'
+  'python-wheel'
+  'python-hatchling'
+)
+checkdepends=('python-pytest')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  PYTHONPATH=src QT_QPA_PLATFORM=offscreen python -m pytest
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  install -Dm644 packaging/redmine-time-tracker.desktop \
+    "$pkgdir/usr/share/applications/redmine-time-tracker.desktop"
+
+  local size
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "src/redmine_time_tracker/resources/icons/appicon-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/redmine-time-tracker.png"
+  done
+  install -Dm644 src/redmine_time_tracker/resources/appicon.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/redmine-time-tracker.svg"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
