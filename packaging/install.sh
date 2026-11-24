@@ -104,6 +104,7 @@ mkdir -p "$APP_DIR" "$BIN_DIR" "$APPLICATIONS" "$ICON_ROOT"
 
 rm -rf "$APP_DIR/app"
 cp -a "$SOURCE_DIR/app" "$APP_DIR/app"
+install -Dm755 "${BASH_SOURCE[0]}" "$APP_DIR/install.sh"
 
 cat > "$BIN_DIR/$APP_NAME" <<EOF
 #!/usr/bin/env bash

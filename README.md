@@ -135,6 +135,13 @@ Remove the application and its menu integration, keeping your config and drafts:
 ./install.sh --uninstall
 ```
 
+The installer copies itself to `~/.local/opt/redmine-time-tracker/install.sh`, so
+the same command works later without the original archive:
+
+```bash
+~/.local/opt/redmine-time-tracker/install.sh --uninstall
+```
+
 `redmine-time-tracker --minimized` starts the application hidden in the tray.
 
 ## First run
