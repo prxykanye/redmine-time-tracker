@@ -46,7 +46,7 @@ class HistoryWidget(QWidget):
         self.period_combo.currentIndexChanged.connect(self.refresh)
         controls.addWidget(self.period_combo)
 
-        self.refresh_btn = QPushButton("🔄 Обновить")
+        self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.clicked.connect(self.refresh)
         controls.addWidget(self.refresh_btn)
 

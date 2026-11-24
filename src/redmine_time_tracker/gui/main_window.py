@@ -119,21 +119,21 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         toolbar = QHBoxLayout()
-        self.refresh_btn = QPushButton("🔄 Обновить задачи")
+        self.refresh_btn = QPushButton("Обновить задачи")
         self.refresh_btn.setToolTip("Обновить список задач (Ctrl+R)")
         self.refresh_btn.clicked.connect(self.refresh_issues)
         toolbar.addWidget(self.refresh_btn)
 
-        self.history_btn = QPushButton("🕘 История")
+        self.history_btn = QPushButton("История")
         self.history_btn.setToolTip("Опубликованные треки")
         self.history_btn.clicked.connect(self._open_history)
         toolbar.addWidget(self.history_btn)
 
-        self.settings_btn = QPushButton("⚙ Настройки")
+        self.settings_btn = QPushButton("Настройки")
         self.settings_btn.clicked.connect(self._show_settings)
         toolbar.addWidget(self.settings_btn)
 
-        self.api_key_btn = QPushButton("🔑 API ключ")
+        self.api_key_btn = QPushButton("API ключ")
         self.api_key_btn.clicked.connect(self._show_api_key_dialog)
         toolbar.addWidget(self.api_key_btn)
 

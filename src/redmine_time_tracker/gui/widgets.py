@@ -137,12 +137,12 @@ class ActiveTrackPanel(QFrame):
         self.time_label.setStyleSheet("font-family: monospace; font-size: 26px; font-weight: bold;")
         layout.addWidget(self.time_label)
 
-        self.pause_btn = QPushButton("⏸ Пауза")
+        self.pause_btn = QPushButton("Пауза")
         self.pause_btn.setToolTip("Поставить трек на паузу (Ctrl+Space)")
         self.pause_btn.clicked.connect(lambda: self.pause_requested.emit(self.track_id))
         layout.addWidget(self.pause_btn)
 
-        self.publish_btn = QPushButton("⬆ Опубликовать")
+        self.publish_btn = QPushButton("Опубликовать")
         self.publish_btn.setToolTip("Опубликовать трек в Redmine (Ctrl+P)")
         self.publish_btn.clicked.connect(lambda: self.publish_requested.emit(self.track_id))
         layout.addWidget(self.publish_btn)
@@ -212,24 +212,24 @@ class TrackWidget(QWidget):
         self.time_label.setStyleSheet("font-family: monospace; font-size: 16px;")
         layout.addWidget(self.time_label)
 
-        self.start_btn = QPushButton("▶ Старт")
+        self.start_btn = QPushButton("Старт")
         self.start_btn.clicked.connect(lambda: self.start_requested.emit(self.track_id))
         layout.addWidget(self.start_btn)
 
-        self.pause_btn = QPushButton("⏸ Пауза")
+        self.pause_btn = QPushButton("Пауза")
         self.pause_btn.clicked.connect(lambda: self.pause_requested.emit(self.track_id))
         layout.addWidget(self.pause_btn)
 
-        self.edit_btn = QPushButton("✎")
+        self.edit_btn = QPushButton("Изменить")
         self.edit_btn.setToolTip("Изменить параметры трека")
         self.edit_btn.clicked.connect(lambda: self.edit_requested.emit(self.track_id))
         layout.addWidget(self.edit_btn)
 
-        self.publish_btn = QPushButton("⬆ Опубликовать")
+        self.publish_btn = QPushButton("Опубликовать")
         self.publish_btn.clicked.connect(lambda: self.publish_requested.emit(self.track_id))
         layout.addWidget(self.publish_btn)
 
-        self.cancel_btn = QPushButton("✕")
+        self.cancel_btn = QPushButton("Отменить")
         self.cancel_btn.setToolTip("Отменить трек")
         self.cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self.track_id))
         layout.addWidget(self.cancel_btn)
@@ -287,7 +287,7 @@ class ExistingEntryWidget(QWidget):
         info.setWordWrap(True)
         layout.addWidget(info, stretch=1)
 
-        button = QPushButton("▶ Продолжить")
+        button = QPushButton("Продолжить")
         button.setToolTip("Создать черновик на основе этой записи")
         button.clicked.connect(lambda: self.continue_requested.emit(self.time_entry_id))
         layout.addWidget(button)
