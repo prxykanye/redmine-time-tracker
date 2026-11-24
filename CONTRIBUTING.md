@@ -3,7 +3,7 @@
 ## Development setup
 
 ```bash
-git clone https://github.com/<you>/redmine-time-tracker.git
+git clone https://github.com/prxykanye/redmine-time-tracker.git
 cd redmine-time-tracker
 uv sync
 pre-commit install

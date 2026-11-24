@@ -58,7 +58,7 @@ draft never touches the network. Only publishing does.
 With `uv`:
 
 ```bash
-git clone https://github.com/<you>/redmine-time-tracker.git
+git clone https://github.com/prxykanye/redmine-time-tracker.git
 cd redmine-time-tracker
 uv sync
 uv run redmine-time-tracker
@@ -67,7 +67,7 @@ uv run redmine-time-tracker
 With `pipx`:
 
 ```bash
-pipx install git+https://github.com/<you>/redmine-time-tracker.git
+pipx install git+https://github.com/prxykanye/redmine-time-tracker.git
 redmine-time-tracker
 ```
 
