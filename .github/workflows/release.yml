@@ -64,19 +64,33 @@ jobs:
             git python python-build python-installer python-wheel \
             python-hatchling python-pytest pyside6 python-requests \
             python-platformdirs python-dotenv
+          command -v git python useradd runuser makepkg
 
       - uses: actions/checkout@v4
 
       - name: Build the pacman package
         run: |
           set -euo pipefail
+          workspace="${GITHUB_WORKSPACE:?}"
+          git config --global --add safe.directory "$workspace"
+          cd "$workspace"
+
+          test -f packaging/arch/PKGBUILD
           version="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
+          test -n "$version"
+          echo "Building $version from $(git rev-parse --short HEAD)"
+
           git archive --format=tar.gz \
             --prefix="redmine-time-tracker-$version/" \
             -o "packaging/arch/redmine-time-tracker-$version.tar.gz" HEAD
-          useradd -m builder
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg -f --noconfirm"
+
+          if ! id -u builder >/dev/null 2>&1; then
+            useradd -m -U builder
+          fi
+          chown -R builder:builder packaging/arch
+          runuser -u builder -- bash -c \
+            "cd '$workspace/packaging/arch' && makepkg -f --noconfirm"
+          ls -lh packaging/arch/*.pkg.tar.zst
 
       - uses: actions/upload-artifact@v4
         with:
@@ -85,8 +99,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
     needs: [python-package, linux-bundle, arch-package]
+    if: always() && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
